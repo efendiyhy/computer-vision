@@ -63,6 +63,53 @@
     <div id="chartComp" class="chart donut"></div>
   </section>
 
+
+
+  <section class="card span2" id="sourceCard">
+    <div class="card-head"><h2>Sumber video &amp; lokasi cuaca</h2><span class="muted small">Perubahan langsung diterapkan &amp; disimpan</span></div>
+    <div class="two">
+      <div class="panel">
+        <h3>Sumber video</h3>
+        <input type="text" id="srcInput" placeholder="URL CCTV (http/https/rtsp), path berkas video di server, atau 0 untuk kamera USB" spellcheck="false">
+        <div class="row wrap">
+          <button class="chip" data-preset="default">CCTV Malang (acuan)</button>
+          <button class="chip" data-preset="0">Kamera USB 0</button>
+          <label class="chip filebtn">⬆ Unggah video<input type="file" id="srcFile" accept="video/*,.mkv" hidden></label>
+        </div>
+        <div class="row"><button class="btn" id="srcTest">Tes koneksi</button><button class="btn primary" id="srcApply">Terapkan sumber</button></div>
+        <div class="result" id="srcResult"></div>
+        <div class="hint">Sumber aktif: <code id="srcActive">-</code></div>
+      </div>
+      <div class="panel">
+        <h3>Lokasi cuaca (Open-Meteo)</h3>
+        <div class="row"><input type="text" id="geoQ" placeholder="Cari nama tempat, mis. Dinoyo Malang" spellcheck="false"><button class="btn" id="geoBtn">Cari</button></div>
+        <ul id="geoRes" class="geo"></ul>
+        <div class="row3"><label>Nama<input type="text" id="locName"></label><label>Lintang<input type="number" step="any" id="locLat"></label><label>Bujur<input type="number" step="any" id="locLon"></label></div>
+        <div class="row"><button class="btn primary" id="locApply">Terapkan lokasi</button><button class="btn" id="locNow">Muat ulang cuaca</button></div>
+        <div class="result" id="locResult"></div>
+        <div class="hint">Tip: koordinat titik CCTV bisa diambil dari klik-kanan di Google Maps.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="histCard">
+    <div class="card-head"><h2>Riwayat tersimpan</h2>
+      <div class="seg" id="segHist"><button data-h="6">6 jam</button><button data-h="24" class="on">24 jam</button><button data-h="72">3 hari</button><button data-h="168">7 hari</button><button data-h="720">30 hari</button></div></div>
+    <div id="chartHist" class="chart"></div>
+    <div class="muted small" id="histNote"></div>
+  </section>
+
+  <section class="card" id="dataCard">
+    <div class="card-head"><h2>Data tersimpan</h2><span class="tag" id="dbState">SQLite</span></div>
+    <div id="dataStats" class="datastats"></div>
+    <div class="row wrap" style="margin-top:10px"><label class="inl">Dari<input type="date" id="dFrom"></label><label class="inl">Sampai<input type="date" id="dTo"></label></div>
+    <div class="row wrap" style="margin-top:8px">
+      <a class="chip" data-exp="events" href="#">⬇ Kejadian lintas</a><a class="chip" data-exp="minutes" href="#">⬇ Per menit</a>
+      <a class="chip" data-exp="weather" href="#">⬇ Cuaca &amp; udara</a><a class="chip" href="/api/export/database">⬇ Database (.db)</a>
+    </div>
+    <div class="hint">Semua kendaraan yang melintas, agregat per menit (dengan cuaca &amp; AQI), dan rekaman cuaca disimpan otomatis, tahan restart.</div>
+  </section>
+
   <section class="card" id="speedCard">
     <div class="card-head"><h2>Kecepatan <span class="tag" title="Perkiraan dari piksel; kalibrasi untuk hasil lebih akurat">estimasi</span></h2></div>
     <div id="speedStats" class="speed-stats"></div>
@@ -86,14 +133,18 @@
 
   <section class="card span2" id="eventsCard">
     <div class="card-head"><h2>Kejadian lintas terbaru</h2>
-      <div class="tools"><a class="chip" href="/api/export/events.csv">⬇ CSV kejadian</a><a class="chip" href="/api/export/minutes.csv">⬇ CSV per menit</a><button class="chip" id="btnReset">↺ Reset hitungan</button></div></div>
+      <div class="tools"><button class="chip" id="btnReset" title="Hanya mengosongkan hitungan di layar; data tersimpan tidak dihapus">↺ Reset tampilan hitungan</button></div></div>
     <ul id="events" class="events"></ul>
   </section>
 </main>
 
 <footer class="foot">
-  <span>Sumber video acuan: <a id="srcLink" href="#" target="_blank" rel="noopener">CCTV Kota Malang</a></span>
-  <span>Cuaca: Open-Meteo · Deteksi: <b id="footDet">-</b> · Kecepatan &amp; SMP bersifat perkiraan</span>
+  <div class="foot-row">
+    <span>Sumber video acuan: <a id="srcLink" href="#" target="_blank" rel="noopener">CCTV Kota Malang</a></span>
+    <span>Akses jaringan lokal: <b id="footUrls">-</b></span>
+    <span>Cuaca: Open-Meteo · Deteksi: <b id="footDet">-</b> · Kecepatan &amp; SMP bersifat perkiraan</span>
+  </div>
+  <div class="credit">Dikembangkan oleh <b>LAB AQHI</b> dan <b>EK Instrumentation</b></div>
 </footer>
 
 <aside class="drawer" id="drawer" aria-hidden="true">

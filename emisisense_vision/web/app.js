@@ -82,23 +82,51 @@ function renderWeather(w) {
   el.innerHTML = html;
 }
 
-/* grafik batang bertumpuk per menit */
-function chartMinutes(s) {
-  const W = 760, H = 230, m = { l: 34, r: 8, t: 10, b: 24 }, data = s.per_minute;
-  const val = d => metric === "pcu" ? d.pcu : KEYS.reduce((a, k) => a + d[k], 0);
-  const max = Math.max(4, ...data.map(val)), top = Math.ceil(max / 2) * 2 || 2;
+/* grafik batang bertumpuk (dipakai arus per menit dan riwayat tersimpan) */
+function bars(el, data, o) {
+  const W = 760, H = 230, m = { l: 36, r: 8, t: 10, b: 24 }, pcu = o.metric === "pcu";
+  const val = d => pcu ? d.pcu : KEYS.reduce((a, k) => a + (d[k] || 0), 0);
+  const max = Math.max(4, ...data.map(val)), top = Math.ceil(max / 4) * 4 || 4;
   const bw = (W - m.l - m.r) / data.length, y = v => H - m.b - (v / top) * (H - m.t - m.b);
   let g = "";
-  for (let i = 0; i <= 4; i++) { const v = top * i / 4; g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="#1f3652" stroke-dasharray="3 4"/><text x="${m.l - 6}" y="${y(v) + 3}" text-anchor="end">${fmt(v, metric === "pcu" ? 1 : 0)}</text>`; }
+  for (let i = 0; i <= 4; i++) { const v = top * i / 4; g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="#1f3652" stroke-dasharray="3 4"/><text x="${m.l - 6}" y="${y(v) + 3}" text-anchor="end">${fmt(v, pcu ? 1 : 0)}</text>`; }
   data.forEach((d, i) => {
-    const x = m.l + i * bw + 1.5; let acc = 0;
-    const tip = `${new Date(d.t * 1000).toTimeString().slice(0, 5)} · ` + (metric === "pcu" ? `${fmt(d.pcu, 1)} SMP` : KEYS.filter(k => d[k]).map(k => `${CLS[k][0]} ${d[k]}`).join(", ") || "0 kendaraan");
-    if (metric === "pcu") { const h = (d.pcu / top) * (H - m.t - m.b); g += `<rect x="${x}" y="${H - m.b - h}" width="${bw - 3}" height="${Math.max(h, 0)}" rx="3" fill="#37adf6"><title>${tip}</title></rect>`; }
-    else KEYS.forEach(k => { if (!d[k]) return; const h = (d[k] / top) * (H - m.t - m.b); g += `<rect x="${x}" y="${H - m.b - acc - h}" width="${bw - 3}" height="${h}" fill="${CLS[k][1]}"><title>${tip}</title></rect>`; acc += h; });
-    if (i % 5 === 0) g += `<text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${new Date(d.t * 1000).toTimeString().slice(0, 5)}</text>`;
+    const x = m.l + i * bw + 1, w = Math.max(1, bw - 2); let acc = 0;
+    const extra = o.extra ? o.extra(d) : "";
+    const tip = `${o.label(d.t)} · ` + (pcu ? `${fmt(d.pcu, 1)} SMP` : KEYS.filter(k => d[k]).map(k => `${CLS[k][0]} ${d[k]}`).join(", ") || "0 kendaraan") + extra;
+    if (pcu) { const h = (d.pcu / top) * (H - m.t - m.b); g += `<rect x="${x}" y="${H - m.b - h}" width="${w}" height="${Math.max(h, 0)}" rx="2" fill="#37adf6"><title>${tip}</title></rect>`; }
+    else { let any = false; KEYS.forEach(k => { if (!d[k]) return; any = true; const h = (d[k] / top) * (H - m.t - m.b); g += `<rect x="${x}" y="${H - m.b - acc - h}" width="${w}" height="${h}" fill="${CLS[k][1]}"><title>${tip}</title></rect>`; acc += h; });
+      if (!any) g += `<rect x="${x}" y="${H - m.b - 2}" width="${w}" height="2" fill="#1f3652"><title>${tip}</title></rect>`; }
+    if (i % o.every === 0) g += `<text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${o.label(d.t, true)}</text>`;
   });
-  $("#chartMin").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Grafik arus lalu lintas per menit">${g}</svg>`;
+  $(el).innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
 }
+const hhmm = t => new Date(t * 1000).toTimeString().slice(0, 5);
+function chartMinutes(s) { bars("#chartMin", s.per_minute, { metric, every: 5, label: t => hhmm(t) }); }
+
+let histH = 24, histT = 0;
+async function loadHistory() {
+  try {
+    const r = await api(`/api/history?hours=${histH}`), d = r.data;
+    const long = r.bucket >= 3600, day = r.bucket >= 6 * 3600;
+    const lab = (t, short) => { const dt = new Date(t * 1000); return day ? `${dt.getDate()}/${dt.getMonth() + 1}` : long ? (short ? `${dt.getDate()}/${dt.getMonth() + 1} ${String(dt.getHours()).padStart(2, "0")}h` : `${dt.getDate()}/${dt.getMonth() + 1} ${hhmm(t)}`) : hhmm(t); };
+    bars("#chartHist", d, { metric, every: Math.max(1, Math.round(d.length / 8)), label: lab,
+      extra: x => (x.speed != null ? ` · ${fmt(x.speed, 0)} km/j` : "") + (x.temp != null ? ` · ${fmt(x.temp, 1)}°C` : "") + (x.pm2_5 != null ? ` · PM2.5 ${fmt(x.pm2_5, 1)}` : "") });
+    const tot = d.reduce((a, x) => a + KEYS.reduce((b, k) => b + x[k], 0), 0);
+    $("#histNote").textContent = `${fmt(tot)} kendaraan tercatat dalam rentang ini · satu batang = ${r.bucket >= 3600 ? r.bucket / 3600 + " jam" : r.bucket / 60 + " menit"} · arahkan kursor untuk detail (kecepatan, suhu, PM2.5)`;
+  } catch (e) { /* abaikan, coba lagi nanti */ }
+}
+$("#segHist").onclick = e => { const b = e.target.closest("button"); if (!b) return; histH = +b.dataset.h; document.querySelectorAll("#segHist button").forEach(x => x.classList.toggle("on", x === b)); loadHistory(); };
+setInterval(loadHistory, 30000);
+
+function renderStorage(st) {
+  if (!st) return;
+  $("#dbState").textContent = st.errors ? `${st.errors} galat tulis` : "tersimpan";
+  $("#dataStats").innerHTML = [["Kejadian", fmt(st.events)], ["Menit tercatat", fmt(st.minutes)], ["Ukuran", fmt(st.size_kb, 0) + " KB"],
+    ["Data pertama", st.first ? st.first.slice(0, 16).replace("T", " ") : "–"], ["Data terakhir", st.last ? st.last.slice(0, 16).replace("T", " ") : "–"], ["Tulis terakhir", st.last_write ? st.last_write.slice(11, 19) : "–"]]
+    .map(([a, b]) => `<div>${a}<b>${b}</b></div>`).join("") + `<div style="grid-column:1/-1">Lokasi berkas<b style="font-size:11.5px;font-weight:500;word-break:break-all">${esc(st.path)}</b></div>`;
+}
+document.querySelectorAll("[data-exp]").forEach(a => a.onclick = e => { e.preventDefault(); const q = new URLSearchParams(); if ($("#dFrom").value) q.set("from", $("#dFrom").value); if ($("#dTo").value) q.set("to", $("#dTo").value); location.href = `/api/export/${a.dataset.exp}.csv?${q}`; });
 
 function chartComp(s) {
   const tot = s.total, R = 54, C = 2 * Math.PI * R; let off = 0, arcs = "";
@@ -143,7 +171,7 @@ function renderEvents(s) {
 function render(p) {
   S = p;
   renderStatus(p.status); renderKpis(p.stats); renderWeather(p.weather);
-  chartMinutes(p.stats); chartComp(p.stats); chartSpeed(p.stats); renderZone(p.stats); renderLines(p.stats); renderTracks(p.stats); renderEvents(p.stats);
+  chartMinutes(p.stats); renderStorage(p.stats.storage); renderFooter(p); syncSourcePanel(p); chartComp(p.stats); chartSpeed(p.stats); renderZone(p.stats); renderLines(p.stats); renderTracks(p.stats); renderEvents(p.stats);
   drawOverlay();
 }
 
@@ -217,9 +245,7 @@ function buildStatic() {
 function openSettings() {
   const c = CFG, ck = k => c.classes.includes(k) ? "checked" : "";
   $("#settingsBody").innerHTML = `
-  <div class="f"><label>Sumber video (URL CCTV / RTSP / berkas / indeks kamera)</label><input type="text" id="sSrc" value="${esc(c.source)}">
-    <div class="row" style="margin-top:8px"><button class="btn primary" id="sApplySrc">Terapkan sumber</button><button class="btn" id="sResetSrc">Pakai CCTV acuan</button></div>
-    <div class="hint">CCTV acuan penelitian: Kota Malang (tautan tetap tersimpan sebagai bawaan).</div></div>
+  <div class="hint" style="margin-bottom:14px">Sumber video dan lokasi cuaca diubah di kartu <b>Sumber video &amp; lokasi cuaca</b> pada halaman utama.</div>
   <div class="f"><label>Detektor</label><select id="sDet"><option value="ssd" ${c.detector === "ssd" ? "selected" : ""}>MobileNet-SSD (bawaan, ringan)</option><option value="yolo" ${c.detector === "yolo" ? "selected" : ""}>YOLO (akurat, butuh ultralytics)</option></select>
     <input type="text" id="sYolo" value="${esc(c.yolo_model)}" style="margin-top:6px" placeholder="yolov8n.pt"></div>
   <div class="f"><label>Ambang keyakinan: <b id="vConf">${c.confidence}</b></label><input type="range" id="sConf" min="0.15" max="0.9" step="0.05" value="${c.confidence}"><div class="hint">Turunkan bila banyak kendaraan terlewat; naikkan bila banyak salah deteksi.</div></div>
@@ -227,37 +253,78 @@ function openSettings() {
   <div class="f"><label>Lebar frame proses (px): <b id="vFw">${c.frame_width}</b></label><input type="range" id="sFw" min="480" max="1280" step="80" value="${c.frame_width}"></div>
   <div class="f"><label>Jenis kendaraan</label><div class="checks">${KEYS.map(k => `<label><input type="checkbox" data-c="${k}" ${ck(k)}>${CLS[k][0]}</label>`).join("")}</div><div class="hint">Truk hanya terdeteksi pada detektor YOLO.</div></div>
   <div class="f"><label>Batas kecepatan (km/jam)</label><input type="number" id="sLim" value="${c.speed_limit_kmh}" min="10" max="120"></div>
-  <div class="f"><h3>Lokasi cuaca (Open-Meteo)</h3><label>Nama lokasi</label><input type="text" id="sLocN" value="${esc(c.location.name)}">
-    <div class="row" style="margin-top:8px"><input type="number" step="0.0001" id="sLat" value="${c.location.lat}"><input type="number" step="0.0001" id="sLon" value="${c.location.lon}"></div>
-    <div class="hint">Isi koordinat titik CCTV (lintang, bujur) agar cuaca &amp; kualitas udara sesuai lokasi.</div></div>
   <div class="f"><h3>Bobot SMP</h3><div class="row">${["car", "motorbike", "bus", "truck", "bicycle"].map(k => `<div><label>${CLS[k][0]}</label><input type="number" step="0.05" data-p="${k}" value="${c.pcu[k]}"></div>`).join("")}</div></div>
   <div class="f"><button class="btn primary" id="sSave" style="width:100%">Simpan pengaturan</button></div>`;
   $("#sConf").oninput = e => $("#vConf").textContent = e.target.value; $("#sEv").oninput = e => $("#vEv").textContent = e.target.value; $("#sFw").oninput = e => $("#vFw").textContent = e.target.value;
-  $("#sApplySrc").onclick = async () => { await save({ source: $("#sSrc").value.trim() || DEFAULT_SRC }); toast("Sumber diperbarui"); };
-  $("#sResetSrc").onclick = async () => { await api("/api/source/reset", {}); await loadCfg(); $("#sSrc").value = CFG.source; toast("Kembali ke CCTV acuan"); };
   $("#sSave").onclick = async () => {
     const pcu = {}; document.querySelectorAll("[data-p]").forEach(i => pcu[i.dataset.p] = parseFloat(i.value) || 1);
     const classes = [...document.querySelectorAll("[data-c]")].filter(i => i.checked).map(i => i.dataset.c);
     await save({ detector: $("#sDet").value, yolo_model: $("#sYolo").value.trim() || "yolov8n.pt", confidence: +$("#sConf").value, detect_every: +$("#sEv").value, frame_width: +$("#sFw").value,
-      classes: classes.length ? classes : ["car"], speed_limit_kmh: +$("#sLim").value || 50, pcu,
-      location: { name: $("#sLocN").value, lat: +$("#sLat").value, lon: +$("#sLon").value } });
+      classes: classes.length ? classes : ["car"], speed_limit_kmh: +$("#sLim").value || 50, pcu });
     toast("Pengaturan disimpan"); closeSettings();
   };
   $("#drawer").classList.add("open"); $("#scrim").hidden = false; $("#drawer").setAttribute("aria-hidden", "false");
 }
 function closeSettings() { $("#drawer").classList.remove("open"); $("#scrim").hidden = true; $("#drawer").setAttribute("aria-hidden", "true"); }
 
+
+/* ---------------- sumber video & lokasi cuaca ---------------- */
+let srcDirty = false, locDirty = false;
+function setRes(id, cls, txt) { const e = $(id); e.className = "result " + cls; e.textContent = txt; }
+function renderFooter(p) { $("#footUrls").innerHTML = (p.urls || []).filter(u => !u.includes("localhost")).map(u => `<a href="${u}">${u}</a>`).join(" · ") || "–"; }
+function syncSourcePanel(p) {
+  if (!CFG) return;
+  $("#srcActive").textContent = p.status.demo ? "Simulasi (mode demo)" : (CFG.source || "-");
+  if (!srcDirty && document.activeElement !== $("#srcInput")) $("#srcInput").value = CFG.source;
+  if (!locDirty && !["locName", "locLat", "locLon"].includes(document.activeElement.id)) { $("#locName").value = CFG.location.name; $("#locLat").value = CFG.location.lat; $("#locLon").value = CFG.location.lon; }
+  const w = p.weather || {};
+  if (w.error) setRes("#locResult", "err", "Cuaca gagal diambil: " + w.error);
+  else if (w.updated) setRes("#locResult", "ok", `Cuaca terakhir diperbarui ${w.updated.slice(11, 19)} untuk ${w.location?.name || ""} (${w.location?.lat}, ${w.location?.lon})`);
+}
+$("#srcInput").oninput = () => srcDirty = true;
+["#locName", "#locLat", "#locLon"].forEach(i => $(i).oninput = () => locDirty = true);
+document.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => { $("#srcInput").value = b.dataset.preset === "default" ? (CFG.default_source || DEFAULT_SRC) : b.dataset.preset; srcDirty = true; });
+$("#srcTest").onclick = async () => {
+  const v = $("#srcInput").value.trim(); if (!v) return setRes("#srcResult", "err", "Isi sumber dulu");
+  setRes("#srcResult", "wait", "Menguji koneksi… (maks. 15 detik)");
+  try { const r = await api("/api/source/test", { source: v }); setRes("#srcResult", r.ok ? "ok" : "err", r.ok ? `✔ ${r.message}: ${r.width}×${r.height} dalam ${r.ms} ms` : "✖ " + r.message); } catch (e) { setRes("#srcResult", "err", "✖ Server tidak merespons"); }
+};
+$("#srcApply").onclick = async () => { const v = $("#srcInput").value.trim() || DEFAULT_SRC; await save({ source: v }); srcDirty = false; setRes("#srcResult", "ok", "Sumber diterapkan. Hitungan sesi dimulai ulang; data lama tetap tersimpan."); toast("Sumber diterapkan"); };
+$("#srcFile").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return; setRes("#srcResult", "wait", `Mengunggah ${f.name}…`);
+  const fd = new FormData(); fd.append("file", f);
+  try { const r = await (await fetch("/api/source/upload", { method: "POST", body: fd })).json(); if (r.error) return setRes("#srcResult", "err", r.error); await loadCfg(); srcDirty = false; setRes("#srcResult", "ok", "Video diunggah dan dipakai sebagai sumber."); } catch (err) { setRes("#srcResult", "err", "Unggah gagal"); }
+};
+$("#geoBtn").onclick = geo; $("#geoQ").onkeydown = e => { if (e.key === "Enter") geo(); };
+async function geo() {
+  const q = $("#geoQ").value.trim(); if (q.length < 2) return; $("#geoRes").innerHTML = '<li class="muted">Mencari…</li>';
+  try {
+    const r = await api("/api/geocode?q=" + encodeURIComponent(q));
+    if (r.error) { $("#geoRes").innerHTML = `<li class="muted">${esc(r.error)}</li>`; return; }
+    $("#geoRes").innerHTML = r.results.map((x, i) => `<li data-i="${i}">${esc(x.name)}<small>${esc(x.admin)} · ${x.lat.toFixed(4)}, ${x.lon.toFixed(4)}</small></li>`).join("") || '<li class="muted">Tidak ditemukan</li>';
+    $("#geoRes").onclick = e => { const li = e.target.closest("li[data-i]"); if (!li) return; const x = r.results[+li.dataset.i]; $("#locName").value = [x.name, x.admin.split(",").pop().trim()].filter(Boolean).join(", "); $("#locLat").value = x.lat; $("#locLon").value = x.lon; locDirty = true; };
+  } catch (e) { $("#geoRes").innerHTML = '<li class="muted">Pencarian gagal</li>'; }
+}
+$("#locApply").onclick = async () => {
+  const lat = parseFloat($("#locLat").value), lon = parseFloat($("#locLon").value);
+  if (isNaN(lat) || isNaN(lon)) return setRes("#locResult", "err", "Lintang & bujur harus angka");
+  const r = await api("/api/config", { location: { name: $("#locName").value.trim(), lat, lon } });
+  if (r.error) return setRes("#locResult", "err", r.error);
+  CFG = r; locDirty = false; setRes("#locResult", "wait", "Lokasi disimpan, mengambil data cuaca…"); toast("Lokasi cuaca diperbarui");
+};
+$("#locNow").onclick = async () => { await api("/api/config", { location: CFG.location }); setRes("#locResult", "wait", "Memuat ulang cuaca…"); };
+
 /* ---------------- start ---------------- */
 $("#btnSettings").onclick = openSettings; $("#btnCloseSettings").onclick = closeSettings; $("#scrim").onclick = closeSettings;
 $("#tLines").onclick = () => setMode("lines"); $("#tRoi").onclick = () => setMode("roi"); $("#tCal").onclick = () => setMode("cal");
 $("#tPause").onclick = async () => { const r = await api("/api/pause", { paused: !window._paused }); window._paused = r.paused; $("#tPause").textContent = r.paused ? "▶ Lanjut" : "⏸ Jeda"; };
 $("#btnReset").onclick = async () => { if (confirm("Reset semua hitungan?")) { await api("/api/reset", {}); toast("Hitungan direset"); } };
-$("#segMetric").onclick = e => { const b = e.target.closest("button"); if (!b) return; metric = b.dataset.m; document.querySelectorAll("#segMetric button").forEach(x => x.classList.toggle("on", x === b)); if (S) chartMinutes(S.stats); };
+$("#segMetric").onclick = e => { const b = e.target.closest("button"); if (!b) return; metric = b.dataset.m; document.querySelectorAll("#segMetric button").forEach(x => x.classList.toggle("on", x === b)); if (S) chartMinutes(S.stats); loadHistory(); };
 addEventListener("keydown", e => { if (e.key === "Escape") { closeSettings(); if (mode) setMode(mode); } });
 setInterval(() => $("#clock").textContent = new Date().toLocaleTimeString("id-ID"), 1000);
 
 (async () => {
-  await loadCfg(); buildStatic(); fit();
+  await loadCfg(); buildStatic(); fit(); loadHistory();
   const es = new EventSource("/api/stream");
   es.onmessage = e => { try { render(JSON.parse(e.data)); } catch (err) { console.error(err); } };
   es.onerror = () => { $("#pill").className = "pill pill-err"; $("#pillText").textContent = "Server terputus"; };

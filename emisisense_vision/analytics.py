@@ -1,18 +1,17 @@
 """Analitik lalu lintas: hitung lintas garis, kecepatan, kepadatan zona, agregat per menit, dan log CSV."""
 from __future__ import annotations
 
-import csv
 import math
 import threading
 import time
 from collections import Counter, defaultdict, deque
 from datetime import datetime
-from pathlib import Path
 
 import cv2
 import numpy as np
 
-from .config import CLASS_LABEL, ROOT, Config
+from .config import CLASS_LABEL, Config
+from .storage import Storage
 from .tracker import Track
 
 # Ukuran karakteristik (akar luas siluet, meter) untuk perkiraan skala otomatis m/piksel.
@@ -36,19 +35,20 @@ def density_level(pcu: float) -> tuple[str, int]:
 
 
 class Analytics:
-    def __init__(self, cfg: Config, weather_cb=None):
+    def __init__(self, cfg: Config, weather_cb=None, storage: Storage | None = None):
         self.cfg = cfg
         self.weather_cb = weather_cb
+        self.storage = storage
         self.lock = threading.RLock()
-        self.t_start = time.time()
+        self._dirty: set[int] = set()
+        self._last_flush = 0.0
         self.reset()
-        self._csv_day = None
-        self._csv_ev = None
-        self._csv_min_ready = False
 
     # ------------------------------------------------------------------ keadaan
     def reset(self):
         with self.lock:
+            if hasattr(self, "minutes"):
+                self.flush()
             self.totals: Counter = Counter()               # kendaraan unik yang melintasi >= 1 garis
             self.line_counts: dict = defaultdict(Counter)  # id garis -> {"d1:car": n, ...}
             self.seen_ids: dict[int, str] = {}              # id unik terkonfirmasi (kelas terakhir)
@@ -62,6 +62,7 @@ class Analytics:
             self.zone_counts: Counter = Counter()
             self.zone_pcu = 0.0
             self.peak_zone = 0
+            self._dirty.clear()
 
     # ------------------------------------------------------------------ pembaruan per frame
     def update(self, tracks: list[Track], t: float, size: tuple[int, int]):
@@ -149,71 +150,48 @@ class Analytics:
             m[cls] += 1
             m["pcu"] += pcu_w.get(cls, 1.0)
             if tr.speed_kmh is not None:
-                m["speeds"].append(tr.speed_kmh)
+                m["sp_sum"] += tr.speed_kmh
+                m["sp_n"] += 1
                 self.speed_samples.append(tr.speed_kmh)
                 if tr.speed_kmh > limit:
                     self.overspeed += 1
-        if self.cfg["log_events"]:
-            self._log_event(ev)
+            self._dirty.add(m["t"])
+        if self.storage and self.cfg["log_events"]:
+            self.storage.add_event(ev, self.cfg["source"])
 
     # ------------------------------------------------------------------ agregat per menit
     def _minute(self, ts: float) -> dict:
         k = int(ts // 60) * 60
         if k not in self.minutes:
-            self.minutes[k] = {"t": k, "pcu": 0.0, "speeds": [], **{c: 0 for c in CLASS_LABEL}}
+            m = {"t": k, "pcu": 0.0, "sp_sum": 0.0, "sp_n": 0, **{c: 0 for c in CLASS_LABEL}}
+            old_row = self.storage.get_minute(k) if self.storage else None   # lanjutkan bila aplikasi restart di menit yang sama
+            if old_row:
+                m.update({c: old_row[c] or 0 for c in CLASS_LABEL}); m["pcu"] = old_row["pcu"] or 0.0
+                m["sp_sum"], m["sp_n"] = old_row["sp_sum"] or 0.0, old_row["sp_n"] or 0
+            self.minutes[k] = m
             for old in sorted(self.minutes)[:-MINUTES_KEPT]:
                 del self.minutes[old]
         return self.minutes[k]
 
     def _rollover(self, now: float):
-        k = int(now // 60) * 60
-        self._minute(now)
-        last = getattr(self, "_last_minute", k)
-        if k != last and last in self.minutes and self.cfg["log_events"]:
-            self._log_minute(self.minutes[last])
-        self._last_minute = k
+        """Pastikan menit berjalan ada, lalu simpan agregat yang berubah ke database tiap beberapa detik."""
+        self._dirty.add(self._minute(now)["t"])          # menit teramati selalu tercatat (0 kendaraan != sistem mati)
+        if self._dirty and now - self._last_flush >= 5.0:
+            self.flush()
 
-    def _log_dir(self) -> Path:
-        d = Path(self.cfg["log_dir"])
-        d = d if d.is_absolute() else ROOT / d
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def _log_event(self, ev: dict):
-        try:
-            day = datetime.fromtimestamp(ev["t"]).strftime("%Y%m%d")
-            path = self._log_dir() / f"events_{day}.csv"
-            new = not path.exists()
-            with open(path, "a", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                if new:
-                    w.writerow(["waktu", "id", "jenis", "garis", "arah", "kecepatan_kmh", "unik"])
-                w.writerow([datetime.fromtimestamp(ev["t"]).astimezone().isoformat(timespec="seconds"), ev["id"], ev["cls"],
-                            ev["line"], ev["dir"], "" if ev["speed"] is None else ev["speed"], int(ev["first"])])
-        except OSError:
-            pass
-
-    def _log_minute(self, m: dict):
-        try:
-            path = self._log_dir() / "traffic_per_minute.csv"
-            new = not path.exists()
+    def flush(self):
+        """Tulis agregat menit yang belum tersimpan ke database (dipanggil berkala dan saat berhenti)."""
+        with self.lock:
+            self._last_flush = time.time()
+            if not self.storage or not self._dirty:
+                self._dirty.clear()
+                return
             wx = self.weather_cb() if self.weather_cb else {}
-            cur, aq = (wx or {}).get("current") or {}, (wx or {}).get("air_quality") or {}
-            with open(path, "a", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                if new:
-                    w.writerow(["waktu_menit", *CLASS_LABEL.keys(), "total", "smp", "kecepatan_rata_kmh",
-                                "suhu_c", "rh_persen", "hujan_mm", "angin_kmh", "pm2_5", "pm10", "co", "no2", "us_aqi"])
-                tot = sum(m[c] for c in CLASS_LABEL)
-                sp = m["speeds"]
-                w.writerow([datetime.fromtimestamp(m["t"]).astimezone().isoformat(timespec="minutes"),
-                            *[m[c] for c in CLASS_LABEL], tot, round(m["pcu"], 2),
-                            round(sum(sp) / len(sp), 1) if sp else "",
-                            cur.get("temperature_2m", ""), cur.get("relative_humidity_2m", ""), cur.get("precipitation", ""),
-                            cur.get("wind_speed_10m", ""), aq.get("pm2_5", ""), aq.get("pm10", ""),
-                            aq.get("carbon_monoxide", ""), aq.get("nitrogen_dioxide", ""), aq.get("us_aqi", "")])
-        except OSError:
-            pass
+            src = self.cfg["source"]
+            for k in sorted(self._dirty):
+                if k in self.minutes:
+                    self.storage.upsert_minute(self.minutes[k], wx, src)
+            self._dirty.clear()
 
     # ------------------------------------------------------------------ keluaran
     def snapshot(self) -> dict:
@@ -259,24 +237,5 @@ class Analytics:
                 "tracks": sorted(self.cur_tracks, key=lambda t: -t["age"])[:40],
                 "recent": [{**e, "t": datetime.fromtimestamp(e["t"]).strftime("%H:%M:%S")} for e in list(self.events)[-12:]][::-1],
                 "since": datetime.fromtimestamp(self.t_start).astimezone().isoformat(timespec="seconds"),
+                "storage": self.storage.stats() if self.storage else None,
             }
-
-    def export_events_csv(self) -> str:
-        with self.lock:
-            out = ["waktu,id,jenis,garis,arah,kecepatan_kmh,unik"]
-            for e in self.events:
-                out.append(",".join([datetime.fromtimestamp(e["t"]).astimezone().isoformat(timespec="seconds"), str(e["id"]), e["cls"], e["line"],
-                                     e["dir"], "" if e["speed"] is None else str(e["speed"]), str(int(e["first"]))]))
-            return "\n".join(out) + "\n"
-
-    def export_minutes_csv(self) -> str:
-        with self.lock:
-            out = ["waktu_menit," + ",".join(CLASS_LABEL) + ",total,smp,kecepatan_rata_kmh"]
-            for k in sorted(self.minutes):
-                m = self.minutes[k]
-                tot = sum(m[c] for c in CLASS_LABEL)
-                sp = m["speeds"]
-                out.append(",".join([datetime.fromtimestamp(k).astimezone().isoformat(timespec="minutes"),
-                                     *[str(m[c]) for c in CLASS_LABEL], str(tot), str(round(m["pcu"], 2)),
-                                     str(round(sum(sp) / len(sp), 1)) if sp else ""]))
-            return "\n".join(out) + "\n"

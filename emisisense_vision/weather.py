@@ -70,7 +70,8 @@ def parse_forecast(js: dict) -> dict:
 
 
 class WeatherService:
-    def __init__(self, cfg: Config, interval: float = 60.0, demo: bool = False):
+    def __init__(self, cfg: Config, interval: float = 60.0, demo: bool = False, on_data=None):
+        self.on_data = on_data
         self.cfg = cfg
         self.interval = interval
         self.demo = demo
@@ -111,6 +112,11 @@ class WeatherService:
                     data.update(location=loc, updated=datetime.now().astimezone().isoformat(timespec="seconds"),
                                 error=None, source="demo" if self.demo else "Open-Meteo")
                     self._data = data
+                if self.on_data:
+                    try:
+                        self.on_data(dict(data))
+                    except Exception:
+                        pass
                 self._last_loc = (loc["lat"], loc["lon"])
             except Exception as exc:
                 with self._lock:

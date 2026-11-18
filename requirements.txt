@@ -1,5 +1,5 @@
 flask>=3.0
-opencv-python>=4.9
+opencv-python-headless>=4.9,<5      # OpenCV 5 menghapus pemuat model Caffe yang dipakai MobileNet-SSD
 numpy>=1.26
 scipy>=1.11
 # Opsional (detektor YOLO, menambah kelas truk dan akurasi lebih baik):

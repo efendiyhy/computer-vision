@@ -4,12 +4,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from emisisense_vision.analytics import Analytics, density_level
 from emisisense_vision.config import Config, DEFAULT_STREAM_URL
 from emisisense_vision.detector import Detection
+from emisisense_vision.storage import Storage
 from emisisense_vision.tracker import Tracker
 from emisisense_vision.weather import parse_forecast, describe
 
 
 def make_cfg(tmp_path):
-    return Config(Path(tmp_path) / "c.json")
+    c = Config(Path(tmp_path) / "c.json")
+    c.update({"log_dir": str(Path(tmp_path) / "data")}, save=False)
+    return c
+
+
+def make_an(cfg):
+    return Analytics(cfg, storage=Storage(Path(cfg["log_dir"])))
 
 
 def test_default_cctv_link_kept(tmp_path):
@@ -19,7 +26,7 @@ def test_default_cctv_link_kept(tmp_path):
 
 def test_tracker_counts_and_speed(tmp_path):
     cfg = make_cfg(tmp_path)
-    an, tr = Analytics(cfg), Tracker()
+    an, tr = make_an(cfg), Tracker()
     W, H = 960, 540
     diag = (W * W + H * H) ** 0.5
     # dua kendaraan berbeda melintasi garis A (y=0.62*H) dari atas ke bawah
@@ -38,7 +45,7 @@ def test_tracker_counts_and_speed(tmp_path):
 
 def test_no_double_count_on_jitter(tmp_path):
     cfg = make_cfg(tmp_path)
-    an, tr = Analytics(cfg), Tracker()
+    an, tr = make_an(cfg), Tracker()
     W, H = 960, 540
     diag = (W * W + H * H) ** 0.5
     y = 0.62 * H
@@ -69,3 +76,48 @@ def test_config_roundtrip(tmp_path):
     c.update({"confidence": 0.5, "lines": [{"id": "Z", "name": "Z", "p1": [0, 0], "p2": [1, 1]}]})
     c2 = make_cfg(tmp_path)
     assert c2["confidence"] == 0.5 and c2["lines"][0]["id"] == "Z"
+
+
+def drive(an, tr, n=80, y0=100):
+    W, H = 960, 540
+    diag = (W * W + H * H) ** 0.5
+    for i in range(n):
+        t = i / 20
+        an.update(tr.step([Detection(300, y0 + i * 6, 380, y0 + 50 + i * 6, .9, "car")], t, diag), t, (W, H))
+
+
+def test_data_persisted_and_exported(tmp_path):
+    cfg = make_cfg(tmp_path)
+    an = make_an(cfg)
+    drive(an, Tracker())
+    an.flush()
+    st = an.storage
+    stats = st.stats()
+    assert stats["events"] >= 1 and stats["minutes"] >= 1 and stats["errors"] == 0
+    ev = st.events_csv().splitlines()
+    assert ev[0].startswith("waktu,id_kendaraan") and len(ev) >= 2 and ",car," in ev[1]
+    mn = st.minutes_csv().splitlines()
+    assert mn[0].startswith("waktu_menit,car") and len(mn) >= 2
+    hist = st.history(1, 300)
+    assert sum(h["car"] for h in hist) == 1
+
+
+def test_restart_continues_same_minute(tmp_path):
+    cfg = make_cfg(tmp_path)
+    an1 = make_an(cfg)
+    drive(an1, Tracker())
+    an1.flush()
+    an1.storage.close()
+    an2 = make_an(cfg)                    # "restart"
+    drive(an2, Tracker())                 # kendaraan baru pada menit yang sama
+    an2.flush()
+    row = an2.storage.history(1, 300)
+    assert sum(h["car"] for h in row) == 2   # dilanjutkan, tidak ditimpa
+
+
+def test_weather_row_saved(tmp_path):
+    st = Storage(tmp_path / "d")
+    st.add_weather({"current": {"temperature_2m": 27.5, "weather_code": 3}, "air_quality": {"pm2_5": 12.0, "us_aqi": 50},
+                    "location": {"lat": -7.9, "lon": 112.6, "name": "Malang"}})
+    csv = st.weather_csv().splitlines()
+    assert len(csv) == 2 and "27.5" in csv[1] and "Malang" in csv[1]
