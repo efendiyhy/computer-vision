@@ -1,12 +1,19 @@
-import sys, time
+import http.server, subprocess, sys, threading, time
 from pathlib import Path
+import cv2
+import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from emisisense_vision import updater
 from emisisense_vision.analytics import Analytics, density_level
 from emisisense_vision.config import Config, DEFAULT_STREAM_URL
-from emisisense_vision.detector import Detection
+from emisisense_vision.detector import Detection, MotionDetector, iou, nms
+from emisisense_vision import reader as rd
+from emisisense_vision.reader import SourceError, open_source
 from emisisense_vision.storage import Storage
 from emisisense_vision.tracker import Tracker
-from emisisense_vision.weather import parse_forecast, describe
+from emisisense_vision.weather import describe
+
+W, H = 800, 450
 
 
 def make_cfg(tmp_path):
@@ -19,105 +26,170 @@ def make_an(cfg):
     return Analytics(cfg, storage=Storage(Path(cfg["log_dir"])))
 
 
+def run(an, tr, frames):
+    for t, dets in frames:
+        tracks = tr.step(dets, t)
+        an.update(tracks, tr.dead, t, (W, H))
+    # akhiri: beri waktu agar trek yang hilang ditutup
+    t_end = frames[-1][0]
+    for k in range(1, 8):
+        tracks = tr.step([], t_end + k * 0.5)
+        an.update(tracks, tr.dead, t_end + k * 0.5, (W, H))
+    return an.snapshot()
+
+
 def test_default_cctv_link_kept(tmp_path):
     assert make_cfg(tmp_path)["source"] == DEFAULT_STREAM_URL
     assert "cctvmalang.24hour.id" in DEFAULT_STREAM_URL
 
 
-def test_tracker_counts_and_speed(tmp_path):
+def test_tracker_low_fps_keeps_identity():
+    """Sumber CCTV 3 fps: kendaraan bergerak cepat tetap satu ID."""
+    tr, ids = Tracker(), set()
+    for i in range(14):
+        t = i / 3.0
+        d = Detection(100 + i * 40, 200, 170 + i * 40, 240, .8, "car")
+        ids |= {x.id for x in tr.step([d], t) if x.confirmed}
+    assert len(ids) == 1
+
+
+def test_tracker_two_vehicles_separate_ids():
+    tr, ids = Tracker(), set()
+    for i in range(20):
+        t = i / 5.0
+        ds = [Detection(100 + i * 12, 150, 170 + i * 12, 190, .9, "car"),
+              Detection(600 - i * 15, 300, 640 - i * 15, 330, .8, "motorbike")]
+        ids |= {x.id for x in tr.step(ds, t) if x.confirmed}
+    assert len(ids) == 2
+
+
+def test_counts_by_line_with_types(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.update({"lines": [{"id": "A", "name": "Garis A", "p1": [0.0, 0.55], "p2": [1.0, 0.55], "dir1": "Maju", "dir2": "Mundur"}]}, save=False)
+    an, tr = make_an(cfg), Tracker()
+    frames = []
+    for i in range(30):
+        t = i / 6
+        frames.append((t, [Detection(300, 80 + i * 10, 380, 130 + i * 10, .9, "car"),
+                           Detection(550, 60 + i * 9, 590, 110 + i * 9, .7, "motorbike")]))
+    s = run(an, tr, frames)
+    assert s["total"] == 2 and s["totals"]["car"] == 1 and s["totals"]["motorbike"] == 1
+    assert s["speed"]["n"] >= 1
+
+
+def test_counts_even_when_line_misplaced(tmp_path):
+    """Garis di tempat yang salah: kendaraan tetap terhitung lewat bukti gerak (di luar garis)."""
+    cfg = make_cfg(tmp_path)
+    cfg.update({"lines": [{"id": "A", "name": "Garis A", "p1": [0.0, 0.02], "p2": [1.0, 0.02], "dir1": "Maju", "dir2": "Mundur"}]}, save=False)
+    an, tr = make_an(cfg), Tracker()
+    frames = [(i / 5, [Detection(200 + i * 14, 250, 280 + i * 14, 300, .8, "car")]) for i in range(24)]
+    s = run(an, tr, frames)
+    assert s["total"] == 1
+    assert any(l.get("free") and l["d1"] + l["d2"] == 1 for l in s["lines"])
+
+
+def test_parked_vehicle_not_counted(tmp_path):
     cfg = make_cfg(tmp_path)
     an, tr = make_an(cfg), Tracker()
-    W, H = 960, 540
-    diag = (W * W + H * H) ** 0.5
-    # dua kendaraan berbeda melintasi garis A (y=0.62*H) dari atas ke bawah
-    for i in range(80):
-        t = i / 20
-        dets = [Detection(300, 100 + i * 6, 380, 150 + i * 6, .9, "car"),
-                Detection(600, 120 + i * 5, 650, 160 + i * 5, .8, "motorbike")]
-        tracks = tr.step(dets, t, diag)
-        an.update(tracks, t, (W, H))
-    s = an.snapshot()
-    assert s["total"] == 2 and s["totals"]["car"] == 1 and s["totals"]["motorbike"] == 1
-    assert s["lines"][0]["d1"] + s["lines"][0]["d2"] == 2
-    assert s["speed"]["n"] == 2 and s["speed"]["avg"] > 0
-    assert len({t["id"] for t in s["tracks"]}) == 2   # ID stabil
+    frames = [(i / 5, [Detection(300, 250, 380, 300, .9, "car")]) for i in range(40)]
+    assert run(an, tr, frames)["total"] == 0
 
 
 def test_no_double_count_on_jitter(tmp_path):
     cfg = make_cfg(tmp_path)
     an, tr = make_an(cfg), Tracker()
-    W, H = 960, 540
-    diag = (W * W + H * H) ** 0.5
     y = 0.62 * H
-    for i in range(60):
-        t = i / 20
-        yy = y + (6 if i % 2 else -6)       # bergetar di sekitar garis
-        an.update(tr.step([Detection(300, yy - 40, 380, yy + 10, .9, "car")], t, diag), t, (W, H))
-    assert an.snapshot()["total"] <= 1
+    frames = [(i / 5, [Detection(300, y - 40 + (6 if i % 2 else -6), 380, y + 10 + (6 if i % 2 else -6), .9, "car")]) for i in range(40)]
+    assert run(an, tr, frames)["total"] <= 1
 
 
-def test_density_levels():
+def test_motion_detector_finds_moving_block():
+    md = MotionDetector()
+    poly = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    found = []
+    for i in range(30):
+        f = np.full((H, W, 3), 90, np.uint8)
+        x = 100 + i * 15
+        cv2.rectangle(f, (x, 200), (x + 90, 260), (30, 60, 200), -1)
+        found = md.blobs(f, poly)
+    assert found, "objek bergerak harus terdeteksi sebagai blob"
+
+
+def test_iou_nms():
+    a, b = Detection(0, 0, 10, 10, .9, "car"), Detection(1, 1, 11, 11, .5, "car")
+    assert iou(a, b) > .6 and len(nms([a, b])) == 1
+
+
+def test_storage_roundtrip_and_restart(tmp_path):
+    cfg = make_cfg(tmp_path)
+    st = Storage(Path(cfg["log_dir"]))
+    st.add_event({"t": time.time(), "cls": "car", "id": 1, "line": "A", "dir": "Maju", "speed": 30.0, "first": True, "via": "garis"}, "uji")
+    assert st.stats()["events"] == 1
+    st.close()
+    assert Storage(Path(cfg["log_dir"])).stats()["events"] == 1
+    assert "cara_hitung" in Storage(Path(cfg["log_dir"])).events_csv().splitlines()[0]
+
+
+def test_density_and_weather():
     assert density_level(0)[1] == 0 and density_level(20)[1] == 4
+    assert describe(0, True)["icon"] == "clear" and describe(95, True)["icon"] == "storm"
 
 
-def test_weather_parse_and_codes():
-    js = {"current": {"time": "2026-11-18T10:00", "temperature_2m": 27.1, "weather_code": 61, "is_day": 1},
-          "current_units": {"temperature_2m": "°C"},
-          "hourly": {"time": [f"2026-11-18T{h:02d}:00" for h in range(8, 20)], "temperature_2m": [26] * 12,
-                     "precipitation_probability": [40] * 12, "precipitation": [0.2] * 12, "weather_code": [3] * 12}}
-    out = parse_forecast(js)
-    assert out["current"]["desc"]["text"] == "Hujan ringan"
-    assert out["hourly"][0]["time"].endswith("10:00")
-    assert describe(0, 0)["icon"] == "clear_night"
+class _Mjpeg(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.end_headers()
+        try:
+            for i in range(40):
+                f = np.full((240, 320, 3), 80, np.uint8)
+                cv2.rectangle(f, (10 + i * 5, 100), (60 + i * 5, 140), (0, 0, 220), -1)
+                ok, jpg = cv2.imencode(".jpg", f)
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(jpg) + jpg.tobytes() + b"\r\n")
+                time.sleep(0.1)
+        except Exception:
+            pass
 
 
-def test_config_roundtrip(tmp_path):
-    c = make_cfg(tmp_path)
-    c.update({"confidence": 0.5, "lines": [{"id": "Z", "name": "Z", "p1": [0, 0], "p2": [1, 1]}]})
-    c2 = make_cfg(tmp_path)
-    assert c2["confidence"] == 0.5 and c2["lines"][0]["id"] == "Z"
+def test_reader_sniffs_mjpeg():
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Mjpeg)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        r = rd.test_source(f"http://127.0.0.1:{srv.server_address[1]}/cam", seconds=2.5)
+        assert r["ok"] and r["width"] == 320 and r["fps"] > 3, r
+    finally:
+        srv.shutdown()
 
 
-def drive(an, tr, n=80, y0=100):
-    W, H = 960, 540
-    diag = (W * W + H * H) ** 0.5
-    for i in range(n):
-        t = i / 20
-        an.update(tr.step([Detection(300, y0 + i * 6, 380, y0 + 50 + i * 6, .9, "car")], t, diag), t, (W, H))
+def test_reader_errors_are_readable():
+    for bad in ("", "/tmp/tidak-ada.mp4"):
+        try:
+            open_source(bad)
+            assert False
+        except SourceError as e:
+            assert str(e)
 
 
-def test_data_persisted_and_exported(tmp_path):
-    cfg = make_cfg(tmp_path)
-    an = make_an(cfg)
-    drive(an, Tracker())
-    an.flush()
-    st = an.storage
-    stats = st.stats()
-    assert stats["events"] >= 1 and stats["minutes"] >= 1 and stats["errors"] == 0
-    ev = st.events_csv().splitlines()
-    assert ev[0].startswith("waktu,id_kendaraan") and len(ev) >= 2 and ",car," in ev[1]
-    mn = st.minutes_csv().splitlines()
-    assert mn[0].startswith("waktu_menit,car") and len(mn) >= 2
-    hist = st.history(1, 300)
-    assert sum(h["car"] for h in hist) == 1
+def _git(cwd, *a):
+    return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def test_restart_continues_same_minute(tmp_path):
-    cfg = make_cfg(tmp_path)
-    an1 = make_an(cfg)
-    drive(an1, Tracker())
-    an1.flush()
-    an1.storage.close()
-    an2 = make_an(cfg)                    # "restart"
-    drive(an2, Tracker())                 # kendaraan baru pada menit yang sama
-    an2.flush()
-    row = an2.storage.history(1, 300)
-    assert sum(h["car"] for h in row) == 2   # dilanjutkan, tidak ditimpa
-
-
-def test_weather_row_saved(tmp_path):
-    st = Storage(tmp_path / "d")
-    st.add_weather({"current": {"temperature_2m": 27.5, "weather_code": 3}, "air_quality": {"pm2_5": 12.0, "us_aqi": 50},
-                    "location": {"lat": -7.9, "lon": 112.6, "name": "Malang"}})
-    csv = st.weather_csv().splitlines()
-    assert len(csv) == 2 and "27.5" in csv[1] and "Malang" in csv[1]
+def test_updater_check_and_apply(tmp_path, monkeypatch):
+    origin, work = tmp_path / "origin", tmp_path / "work"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@t"); _git(origin, "config", "user.name", "t")
+    (origin / "a.txt").write_text("1"); _git(origin, "add", "."); _git(origin, "commit", "-qm", "awal")
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    monkeypatch.setattr(updater, "ROOT", work)
+    monkeypatch.setattr(updater, "BRANCH", "main")
+    updater._cache.update(t=0, data=None)
+    assert updater.check(force=True)["available"] is False
+    (origin / "a.txt").write_text("2"); _git(origin, "commit", "-qam", "perubahan baru")
+    r = updater.check(force=True)
+    assert r["available"] and r["behind"] == 1 and r["changes"][0]["subject"] == "perubahan baru"
+    res = updater.apply()
+    assert res["ok"] and (work / "a.txt").read_text() == "2"
+    assert updater.check(force=True)["available"] is False

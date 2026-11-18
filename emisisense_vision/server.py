@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import tempfile
 import threading
 import time
@@ -17,7 +18,9 @@ from werkzeug.utils import secure_filename
 from . import __version__
 from .analytics import Analytics
 from .config import CLASS_LABEL, DEFAULT_STREAM_URL, ROOT, Config
+from . import updater
 from .pipeline import Pipeline
+from .reader import test_source as probe_source
 from .storage import Storage
 from .weather import WeatherService, _get_json
 
@@ -107,7 +110,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
         return Response(jpg, mimetype="image/jpeg", headers={"Content-Disposition": f"attachment; filename=snapshot_{int(time.time())}.jpg"})
 
     def payload():
-        return {"t": time.time(), "status": pipe.status, "stats": analytics.snapshot(), "weather": weather.snapshot(),
+        return {"t": time.time(), "status": pipe.get_status(), "stats": analytics.snapshot(), "weather": weather.snapshot(),
                 "version": __version__, "urls": server_urls, "demo": demo}
 
     @app.get("/api/state")
@@ -163,23 +166,9 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
         if not src:
             return jsonify({"ok": False, "message": "Sumber kosong"}), 400
         res: dict = {}
-
-        def probe():
-            t0 = time.time()
-            cap = cv2.VideoCapture(int(src) if src.isdigit() else src)
-            try:
-                if not cap.isOpened():
-                    res.update(ok=False, message="Sumber tidak dapat dibuka"); return
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    res.update(ok=False, message="Terhubung tetapi tidak ada frame"); return
-                res.update(ok=True, message="Berhasil membaca frame", width=int(frame.shape[1]), height=int(frame.shape[0]),
-                           ms=int((time.time() - t0) * 1000))
-            finally:
-                cap.release()
-        th = threading.Thread(target=probe, daemon=True)
-        th.start(); th.join(15)
-        return jsonify(res or {"ok": False, "message": "Waktu habis (15 detik): sumber tidak merespons"})
+        th = threading.Thread(target=lambda: res.update(probe_source(src, 4.0)), daemon=True)
+        th.start(); th.join(40)
+        return jsonify(res or {"ok": False, "message": "Waktu habis: sumber tidak merespons dalam 40 detik"})
 
     @app.post("/api/source/upload")
     def upload_source():
@@ -217,7 +206,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
 
     @app.post("/api/pause")
     def pause():
-        pipe.paused = bool((request.get_json(silent=True) or {}).get("paused", not pipe.paused))
+        pipe.set_paused(bool((request.get_json(silent=True) or {}).get("paused", not pipe.paused)))
         return jsonify({"paused": pipe.paused})
 
     @app.post("/api/calibrate")
@@ -236,6 +225,22 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
     def calibrate_clear():
         cfg.update({"calibration": {"m_per_px": None, "ref_px": None, "ref_m": None}})
         return jsonify({"ok": True})
+
+    # ---------------------------------------------------------------- pembaruan
+    @app.get("/api/update/check")
+    def update_check():
+        return jsonify(updater.check(force=request.args.get("force") == "1"))
+
+    @app.post("/api/update/apply")
+    def update_apply():
+        if os.environ.get("EMISISENSE_DISABLE_WEB_UPDATE") == "1":
+            return jsonify({"ok": False, "message": "Pembaruan lewat web dinonaktifkan di server ini."}), 403
+        analytics.flush()
+        res = updater.apply()
+        if res.get("ok") and (request.get_json(silent=True) or {}).get("restart", True):
+            res["restarting"] = True
+            updater.restart_soon(app.shutdown)
+        return jsonify(res)
 
     # ---------------------------------------------------------------- data tersimpan
     @app.get("/api/storage")

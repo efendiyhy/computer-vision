@@ -1,11 +1,12 @@
-"""Pelacak multi-objek bergaya SORT: filter Kalman kecepatan-konstan + asosiasi IoU (Hungarian).
+"""Pelacak multi-objek berbasis waktu (Kalman kecepatan-konstan + penugasan Hungarian).
 
-Tiap frame: ``predict()`` memajukan semua jalur; bila ada deteksi baru, ``update(dets)`` mengasosiasikan.
-Kelas jalur ditentukan dengan voting berbobot keyakinan sehingga label tidak berkedip.
+Dirancang untuk sumber dengan frame rate rendah atau tidak rata (CCTV publik): gerbang pencocokan
+dihitung dari ukuran kotak dan selang waktu, bukan dari IoU antar-frame berurutan.
 """
 from __future__ import annotations
 
 import itertools
+import math
 from collections import Counter, deque
 
 import numpy as np
@@ -14,41 +15,39 @@ from scipy.optimize import linear_sum_assignment
 from .detector import Detection
 
 _ids = itertools.count(1)
-
-
-def iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    if len(a) == 0 or len(b) == 0:
-        return np.zeros((len(a), len(b)))
-    x1 = np.maximum(a[:, None, 0], b[None, :, 0]); y1 = np.maximum(a[:, None, 1], b[None, :, 1])
-    x2 = np.minimum(a[:, None, 2], b[None, :, 2]); y2 = np.minimum(a[:, None, 3], b[None, :, 3])
-    inter = np.clip(x2 - x1, 0, None) * np.clip(y2 - y1, 0, None)
-    aa = (a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1]); ab = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
-    return inter / (aa[:, None] + ab[None, :] - inter + 1e-9)
+VEHICLE_FAMILY = {"car": 0, "bus": 0, "truck": 0, "other": 0, "motorbike": 1, "bicycle": 1}
 
 
 class Track:
     def __init__(self, det: Detection, t: float):
         self.id = next(_ids)
         cx, cy = (det.x1 + det.x2) / 2, (det.y1 + det.y2) / 2
-        # keadaan: [cx, cy, w, h, vx, vy]
-        self.x = np.array([cx, cy, det.w, det.h, 0.0, 0.0])
-        self.P = np.diag([25.0, 25.0, 25.0, 25.0, 400.0, 400.0])
-        self.votes: Counter = Counter({det.cls: det.conf})
+        self.x = np.array([cx, cy, det.w, det.h, 0.0, 0.0])          # cx, cy, w, h, vx, vy (piksel, piksel/detik)
+        self.P = np.diag([30.0, 30.0, 40.0, 40.0, 90.0 ** 2, 90.0 ** 2])
+        self.votes: Counter = Counter()
+        self._vote(det)
         self.conf = det.conf
         self.hits = 1
-        self.age = 1
-        self.miss = 0
+        self.miss_steps = 0
         self.t0 = t
-        self.last_t = t
-        self.trail: deque = deque(maxlen=60)       # (t, cx, by) titik kontak tanah
+        self.last_t = t           # waktu terakhir diperbarui oleh deteksi
+        self.pred_t = t
+        self.trail: deque = deque(maxlen=80)          # (t, x, y_kaki) hanya dari pengukuran nyata
+        self.trail.append((t, cx, det.y2))
+        self.path_len = 0.0
+        self.first_foot = (cx, det.y2)
         self.speed_kmh: float | None = None
         self.max_speed = 0.0
-        self.side: dict[str, int] = {}              # id garis -> tanda sisi terakhir
+        self.side: dict[str, int] = {}
         self.counted: set[tuple[str, int]] = set()
+        self.counted_unique = False
         self.in_roi = False
-        self.entered_roi_t: float | None = None
 
-    # ---- properti turunan
+    def _vote(self, det: Detection):
+        w = 0.15 if det.cls == "other" else max(det.conf, 0.05)
+        self.votes[det.cls] += w
+
+    # ---- properti
     @property
     def cls(self) -> str:
         return self.votes.most_common(1)[0][0]
@@ -63,74 +62,131 @@ class Track:
         return float(self.x[0]), float(self.x[1] + self.x[3] / 2)
 
     @property
-    def confirmed(self) -> bool:
-        return self.hits >= 3
+    def size(self) -> float:
+        return float(max(self.x[2], self.x[3]))
 
-    # ---- Kalman (dt dalam satuan frame deteksi)
-    def predict(self, dt: float = 1.0):
+    @property
+    def confirmed(self) -> bool:
+        return self.hits >= 2
+
+    @property
+    def displacement(self) -> float:
+        f = self.foot
+        return math.hypot(f[0] - self.first_foot[0], f[1] - self.first_foot[1])
+
+    @property
+    def direction_vec(self):
+        return float(self.x[4]), float(self.x[5])
+
+    # ---- Kalman
+    def predict(self, dt: float):
+        dt = max(1e-3, min(dt, 3.0))
         F = np.eye(6); F[0, 4] = dt; F[1, 5] = dt
-        Q = np.diag([1.0, 1.0, 2.0, 2.0, 4.0, 4.0]) * dt
+        q = np.diag([4.0, 4.0, 6.0, 6.0, 900.0, 900.0]) * dt
         self.x = F @ self.x
         self.x[2:4] = np.maximum(self.x[2:4], 4.0)
-        self.P = F @ self.P @ F.T + Q
-        self.age += 1
-        self.miss += 1
+        self.P = F @ self.P @ F.T + q
+        self.miss_steps += 1
+
+    def extrapolate(self, now: float):
+        """Kotak untuk tampilan pada waktu 'now' (tanpa mengubah keadaan)."""
+        dt = max(0.0, min(now - self.pred_t, 1.2))
+        cx, cy, w, h = self.x[:4]
+        return cx + self.x[4] * dt, cy + self.x[5] * dt, w, h
 
     def update(self, det: Detection, t: float):
         z = np.array([(det.x1 + det.x2) / 2, (det.y1 + det.y2) / 2, det.w, det.h])
         H = np.zeros((4, 6)); H[:4, :4] = np.eye(4)
-        R = np.diag([9.0, 9.0, 25.0, 25.0])
+        R = np.diag([16.0, 16.0, 49.0, 49.0])
         S = H @ self.P @ H.T + R
         K = self.P @ H.T @ np.linalg.inv(S)
+        before = self.foot
         self.x = self.x + K @ (z - H @ self.x)
         self.P = (np.eye(6) - K @ H) @ self.P
-        self.votes[det.cls] += det.conf
-        self.conf = 0.7 * self.conf + 0.3 * det.conf
+        self._vote(det)
+        self.conf = 0.6 * self.conf + 0.4 * det.conf
         self.hits += 1
-        self.miss = 0
+        self.miss_steps = 0
+        self.last_t = t
+        f = self.foot
+        self.path_len += math.hypot(f[0] - before[0], f[1] - before[1])
+        self.trail.append((t, f[0], f[1]))
 
 
 class Tracker:
-    def __init__(self, iou_thr: float = 0.18, max_miss: int = 14, max_dist_frac: float = 0.12):
+    def __init__(self, max_age_s: float = 1.6, min_age_steps: int = 2):
         self.tracks: list[Track] = []
-        self.iou_thr = iou_thr
-        self.max_miss = max_miss
-        self.max_dist_frac = max_dist_frac
+        self.dead: list[Track] = []
+        self.max_age_s = max_age_s
+        self.last_t: float | None = None
+        self.steps = 0
 
     def reset(self):
-        self.tracks.clear()
+        self.tracks.clear(); self.dead.clear(); self.last_t = None
 
-    def step(self, dets: list[Detection] | None, t: float, frame_diag: float, dt_frames: float = 1.0) -> list[Track]:
-        """Satu langkah waktu. dets=None berarti frame tanpa deteksi (hanya prediksi)."""
+    def step(self, dets: list[Detection], t: float) -> list[Track]:
+        """Satu siklus deteksi pada waktu t (detik)."""
+        dt = 0.1 if self.last_t is None else max(1e-3, t - self.last_t)
+        self.last_t = t
+        self.steps += 1
+        self.dead = []
         for tr in self.tracks:
-            tr.predict(dt_frames)
-        if dets is not None:
-            self._associate(dets, t, frame_diag)
-        self.tracks = [tr for tr in self.tracks if tr.miss <= self.max_miss and not (tr.hits < 3 and tr.miss > 3)]
+            tr.predict(dt)
+            tr.pred_t = t
+        self._associate(dets, t, dt)
+        keep = []
         for tr in self.tracks:
-            if tr.miss == 0:
-                tr.last_t = t
-            tr.trail.append((t, tr.foot[0], tr.foot[1]))
+            age_missing = t - tr.last_t
+            limit = self.max_age_s if tr.hits >= 2 else min(self.max_age_s, 0.8)
+            if age_missing > max(limit, 1.5 * dt):
+                (self.dead if tr.hits >= 2 else []).append(tr)
+            else:
+                keep.append(tr)
+        self.tracks = keep
         return self.tracks
 
-    def _associate(self, dets: list[Detection], t: float, frame_diag: float):
+    def _associate(self, dets: list[Detection], t: float, dt: float):
         if self.tracks and dets:
-            tb = np.array([tr.box for tr in self.tracks]); db = np.array([[d.x1, d.y1, d.x2, d.y2] for d in dets])
-            iou = iou_matrix(tb, db)
-            # biaya: IoU + sedikit bonus kedekatan pusat (membantu objek cepat dengan IoU rendah)
-            tc = np.array([[(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] for b in tb])
-            dc = np.array([[(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] for b in db])
-            dist = np.linalg.norm(tc[:, None] - dc[None], axis=2) / frame_diag
-            score = iou + 0.25 * np.clip(1 - dist / self.max_dist_frac, 0, 1)
-            score[(iou < 0.02) & (dist > self.max_dist_frac)] = 0
-            rows, cols = linear_sum_assignment(-score)
-            matched_t, matched_d = set(), set()
+            n, m = len(self.tracks), len(dets)
+            cost = np.full((n, m), 1e3)
+            for i, tr in enumerate(self.tracks):
+                px, py = tr.x[0], tr.x[1]
+                tb = tr.box
+                tsz = tr.size
+                tentative = tr.hits <= 2
+                for j, d in enumerate(dets):
+                    dcx, dcy = (d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2
+                    dist = math.hypot(dcx - px, dcy - py)
+                    sz = max(tsz, d.w, d.h)
+                    gate = sz * (2.2 if tentative else 1.5) + math.hypot(tr.x[4], tr.x[5]) * dt * 0.35
+                    if dist > gate:
+                        continue
+                    ix = max(0.0, min(tb[2], d.x2) - max(tb[0], d.x1)); iy = max(0.0, min(tb[3], d.y2) - max(tb[1], d.y1))
+                    inter = ix * iy
+                    iou = inter / ((tb[2] - tb[0]) * (tb[3] - tb[1]) + d.w * d.h - inter + 1e-9)
+                    c = dist / gate * 0.7 + (1 - iou) * 0.3
+                    fa, fb = VEHICLE_FAMILY.get(tr.cls, 0), VEHICLE_FAMILY.get(d.cls, 0)
+                    if fa != fb:
+                        c += 0.25
+                    cost[i, j] = c
+            rows, cols = linear_sum_assignment(cost)
+            used = set()
             for r, c in zip(rows, cols):
-                if score[r, c] >= self.iou_thr:
+                if cost[r, c] < 1.0:
                     self.tracks[r].update(dets[c], t)
-                    matched_t.add(r); matched_d.add(c)
-            unmatched = [i for i in range(len(dets)) if i not in matched_d]
+                    used.add(c)
+            new = [dets[j] for j in range(m) if j not in used]
         else:
-            unmatched = list(range(len(dets)))
-        for i in unmatched:
-            self.tracks.append(Track(dets[i], t))
+            new = list(dets)
+        for d in new:
+            if d.cls == "other" and d.conf < 0.35:
+                # kelas 'other' dari gerak: abaikan bila sudah ada trek yang menempati area itu
+                if any(self._inside(tr, d) for tr in self.tracks):
+                    continue
+            self.tracks.append(Track(d, t))
+
+    @staticmethod
+    def _inside(tr: Track, d: Detection) -> bool:
+        cx, cy = (d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2
+        b = tr.box
+        return b[0] - 4 <= cx <= b[2] + 4 and b[1] - 4 <= cy <= b[3] + 4

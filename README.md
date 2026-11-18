@@ -62,7 +62,13 @@ Pakai conda? `conda create -n emisisense python=3.11 && conda activate emisisens
 
 ### Memperbarui
 
-Jalankan ulang perintah pemasang. Kode ditarik dari git (`git pull`); folder `data/` dan `config.json` (data deteksi dan pengaturan) tidak ikut terhapus. Untuk layanan systemd: `sudo systemctl restart emisisense-vision` setelah pembaruan.
+Data (`data/`) dan pengaturan (`config.json`) tidak pernah tersentuh pembaruan. Ada tiga cara:
+
+1. **Dari web:** menu **Sistem → Versi & pembaruan**. Aplikasi memeriksa GitHub, menampilkan daftar perubahan, lalu tombol **Perbarui dan mulai ulang** menarik kode, memasang dependensi bila berubah, dan memulai ulang sendiri. Lencana merah muncul di menu bila ada versi baru.
+2. **Dari terminal:** `./update.sh` (Linux) atau `update.bat` (Windows). Skrip ini juga memulai ulang layanan systemd `emisisense` bila ada.
+3. **Manual:** `git pull --ff-only` lalu `.venv/bin/pip install -r requirements.txt`.
+
+Pembaruan ditolak bila ada perubahan lokal pada berkas kode (agar tidak menimpa suntingan Anda); simpan dulu dengan `git stash`.
 
 ## Menjalankan
 
@@ -89,14 +95,21 @@ Bawaannya mendengarkan di semua antarmuka (`0.0.0.0`). Di jaringan bersama, paka
 
 | Fitur | Keterangan |
 |---|---|
-| Deteksi & jenis | Mobil, motor, bus, sepeda (MobileNet-SSD bawaan); truk bila memakai YOLO. Deteksi dua lintasan (frame penuh + zona diperbesar) agar kendaraan kecil/jauh tertangkap. |
-| Pelacakan | Filter Kalman + asosiasi Hungarian, voting jenis agar label stabil, ID konsisten untuk banyak kendaraan sekaligus. |
-| Hitung & arah | Garis hitung bebas digeser di atas video; hitungan per arah dan per jenis; satu kendaraan dihitung satu kali. |
-| Kecepatan | Skala otomatis dari ukuran khas jenis kendaraan, atau **kalibrasi manual** (klik dua titik + panjang nyata). **Hanya estimasi.** |
-| Kepadatan | Jumlah dan SMP di zona pengamatan, level Lengang sampai Sangat padat (indikatif). |
-| Cuaca & udara | Open-Meteo: suhu, kelembapan, angin, hujan, prakiraan 12 jam, US AQI, PM2.5, PM10, NO₂, CO, SO₂, O₃. |
-| **Sumber & lokasi** | Ubah sumber video (URL/RTSP/berkas/kamera USB, unggah video, tes koneksi) dan lokasi Open-Meteo (cari nama tempat atau isi koordinat) langsung dari web. |
-| **Data tersimpan** | Lihat di bawah. |
+| Video lancar | Tiga utas terpisah (baca, deteksi, kirim): video tetap mulus walau deteksi lambat. Kotak kendaraan diprediksi bergerak di antara hasil deteksi. |
+| Deteksi & jenis | MobileNet-SSD pada frame penuh, zona diperbesar atau ubin (presisi Cepat/Seimbang/Teliti), ditambah pencarian di area yang bergerak. Objek bergerak yang tidak dikenali dihitung sebagai **Lainnya**. YOLO opsional (juga mengenali truk). |
+| Pelacakan | Kalman berbasis detik + Hungarian, jendela asosiasi adaptif; dirancang untuk CCTV 2 sampai 5 fps. |
+| Hitung & arah | Garis hitung bebas digeser; satu kendaraan dihitung satu kali. Bila garis tidak tepat, kendaraan yang jelas bergerak tetap terhitung di baris **Di luar garis**. |
+| Zona pengamatan | Seret titik biru di video; kepadatan dihitung dan deteksi difokuskan di zona. Petunjuk editor tampil di bawah video, bukan di atasnya. |
+| Kecepatan | Skala otomatis dari ukuran khas jenis, atau **kalibrasi manual**. **Hanya estimasi.** |
+| Cuaca & udara | Open-Meteo: suhu, kelembapan, angin, hujan, prakiraan, US AQI, PM2,5, PM10, NO₂, CO, SO₂, O₃. |
+| Sumber & lokasi | Ganti sumber video (URL, HLS, MJPEG, JPEG, RTSP, berkas, kamera USB) dengan **Tes koneksi** yang melaporkan jenis, resolusi, dan fps nyata; ganti lokasi cuaca. |
+| Diagnosa | Menu Sistem menampilkan fps masuk/keluar, waktu per deteksi, objek mentah dan objek gerak. Banner di Pemantauan menjelaskan bila video tidak tersambung, terlalu lambat dari sumbernya, atau belum ada hitungan. |
+| Data tersimpan | Lihat di bawah. |
+
+### Bila video lambat atau tidak ada hitungan
+
+- **Lambat:** lihat *Frame masuk* di menu Sistem. Bila di bawah 3 fps, kamera/server CCTV-nya yang lambat; aplikasi tetap melacak, kecepatan kendaraan kurang teliti. Bila *Waktu per deteksi* tinggi, turunkan *Lebar frame proses* atau pilih presisi **Cepat** di menu Deteksi.
+- **Tidak ada hitungan:** pastikan zona menutupi badan jalan dan garis melintang di jalur kendaraan; turunkan ambang keyakinan (0,25 sampai 0,3); aktifkan *Bantu dengan deteksi gerak*; nyalakan *Deteksi mentah* di bawah video untuk melihat apa yang ditemukan model.
 
 ## Penyimpanan data
 
@@ -125,10 +138,13 @@ Lalu pilih **YOLO** di Pengaturan (bobot `yolov8n.pt` terunduh otomatis saat per
 
 ```
 install.sh / install.ps1    # pemasang Linux / Windows (clone git + .venv)
+update.sh / update.bat      # pembaruan dari GitHub
 run.py  run.sh  run.bat     # peluncur
 emisisense_vision/
   config.py                 # konfigurasi + tautan CCTV acuan
-  detector.py  tracker.py   # MobileNet-SSD / YOLO ; Kalman + Hungarian
+  reader.py                 # pembaca sumber (HLS, MJPEG, JPEG, RTSP, berkas) + tes koneksi
+  detector.py  tracker.py   # SSD / gerak / YOLO ; Kalman + Hungarian
+  updater.py                # periksa dan pasang pembaruan dari git
   analytics.py              # hitung, kecepatan, kepadatan
   storage.py                # SQLite: events, minutes, weather + ekspor CSV
   weather.py                # Open-Meteo (cuaca + kualitas udara)
@@ -138,13 +154,13 @@ emisisense_vision/
 models/  legacy/  tests/    # model SSD ; skrip awal ; pytest
 ```
 
-API ringkas: `GET /api/state`, `GET /api/stream` (SSE), `GET|POST /api/config`, `POST /api/source/test`, `GET /api/geocode?q=`, `GET /api/history?hours=24`, `GET /api/storage`, `GET /api/export/{events,minutes,weather}.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`, `GET /api/export/database`.
+API ringkas: `GET /api/state`, `GET /api/stream` (SSE), `GET|POST /api/config`, `POST /api/source/test`, `GET /api/geocode?q=`, `GET /api/history?hours=24`, `GET /api/storage`, `GET /api/update/check`, `POST /api/update/apply`, `POST /api/pause`, `GET /api/export/{events,minutes,weather}.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`, `GET /api/export/database`.
 
 ## Catatan keterbatasan
 
 - Kecepatan dan SMP adalah **perkiraan**; untuk pelaporan, kalibrasi dengan jarak nyata di lokasi dan validasi dengan pengukuran lapangan.
 - Akurasi bergantung pada sudut kamera, resolusi, dan cahaya; MobileNet-SSD kurang baik untuk kendaraan sangat kecil atau terhalang.
-- Peningkatan akurasi: pakai YOLO, kecilkan "deteksi tiap N frame", sempitkan zona pengamatan pada jalan.
+- Peningkatan akurasi: pakai YOLO, naikkan presisi, sempitkan zona pada badan jalan.
 - Uji: `pip install pytest && pytest`.
 
 ---

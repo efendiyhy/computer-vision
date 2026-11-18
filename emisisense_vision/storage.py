@@ -18,16 +18,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CLASSES = ["car", "motorbike", "bus", "truck", "bicycle"]
+CLASSES = ["car", "motorbike", "bus", "truck", "bicycle", "other"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, track_id INTEGER, cls TEXT, line TEXT, direction TEXT,
-  speed_kmh REAL, is_first INTEGER, source TEXT);
+  speed_kmh REAL, is_first INTEGER, source TEXT, via TEXT);
 CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts);
 CREATE TABLE IF NOT EXISTS minutes(
   minute INTEGER PRIMARY KEY, car INTEGER DEFAULT 0, motorbike INTEGER DEFAULT 0, bus INTEGER DEFAULT 0,
-  truck INTEGER DEFAULT 0, bicycle INTEGER DEFAULT 0, total INTEGER DEFAULT 0, pcu REAL DEFAULT 0,
+  truck INTEGER DEFAULT 0, bicycle INTEGER DEFAULT 0, other INTEGER DEFAULT 0, total INTEGER DEFAULT 0, pcu REAL DEFAULT 0,
   sp_sum REAL DEFAULT 0, sp_n INTEGER DEFAULT 0,
   temp REAL, rh REAL, rain REAL, wind REAL, pm2_5 REAL, pm10 REAL, co REAL, no2 REAL, us_aqi REAL, source TEXT);
 CREATE TABLE IF NOT EXISTS weather(
@@ -53,10 +53,20 @@ class Storage:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
+            self._migrate()
             self._db.commit()
         self.last_write = None
         self.errors = 0
         self._stats_cache = (0.0, {})
+
+    def _migrate(self):
+        """Tambahkan kolom baru pada database lama (pembaruan aplikasi tidak menghapus data)."""
+        def cols(t):
+            return {r[1] for r in self._db.execute(f"PRAGMA table_info({t})")}
+        if "other" not in cols("minutes"):
+            self._db.execute("ALTER TABLE minutes ADD COLUMN other INTEGER DEFAULT 0")
+        if "via" not in cols("events"):
+            self._db.execute("ALTER TABLE events ADD COLUMN via TEXT")
 
     # ------------------------------------------------------------ tulis
     def _exec(self, sql: str, args=()):
@@ -71,8 +81,8 @@ class Storage:
             return False
 
     def add_event(self, ev: dict, source: str = ""):
-        self._exec("INSERT INTO events(ts,track_id,cls,line,direction,speed_kmh,is_first,source) VALUES(?,?,?,?,?,?,?,?)",
-                   (ev["t"], ev["id"], ev["cls"], ev["line"], ev["dir"], ev["speed"], int(ev["first"]), source))
+        self._exec("INSERT INTO events(ts,track_id,cls,line,direction,speed_kmh,is_first,source,via) VALUES(?,?,?,?,?,?,?,?,?)",
+                   (ev["t"], ev["id"], ev["cls"], ev["line"], ev["dir"], ev["speed"], int(ev["first"]), source, ev.get("via", "garis")))
 
     def get_minute(self, minute: int) -> dict | None:
         with self._lock:
@@ -86,8 +96,8 @@ class Storage:
         vals += [total, round(m["pcu"], 3), round(m["sp_sum"], 2), m["sp_n"], cur.get("temperature_2m"), cur.get("relative_humidity_2m"),
                  cur.get("precipitation"), cur.get("wind_speed_10m"), aq.get("pm2_5"), aq.get("pm10"), aq.get("carbon_monoxide"),
                  aq.get("nitrogen_dioxide"), aq.get("us_aqi"), source]
-        self._exec("INSERT OR REPLACE INTO minutes(minute,car,motorbike,bus,truck,bicycle,total,pcu,sp_sum,sp_n,temp,rh,rain,wind,"
-                   "pm2_5,pm10,co,no2,us_aqi,source) VALUES(" + ",".join("?" * 20) + ")", vals)
+        self._exec("INSERT OR REPLACE INTO minutes(minute,car,motorbike,bus,truck,bicycle,other,total,pcu,sp_sum,sp_n,temp,rh,rain,wind,"
+                   "pm2_5,pm10,co,no2,us_aqi,source) VALUES(" + ",".join("?" * 21) + ")", vals)
 
     def add_weather(self, data: dict):
         cur, aq, loc = data.get("current") or {}, data.get("air_quality") or {}, data.get("location") or {}
@@ -121,7 +131,7 @@ class Storage:
         t0 = t1 - int(hours * 3600 // bucket) * bucket
         with self._lock:
             rows = self._db.execute(
-                "SELECT (minute/?)*? b, SUM(car) car, SUM(motorbike) motorbike, SUM(bus) bus, SUM(truck) truck, SUM(bicycle) bicycle, "
+                "SELECT (minute/?)*? b, SUM(car) car, SUM(motorbike) motorbike, SUM(bus) bus, SUM(truck) truck, SUM(bicycle) bicycle, SUM(other) other, "
                 "SUM(pcu) pcu, SUM(sp_sum) sp_sum, SUM(sp_n) sp_n, AVG(temp) temp, AVG(pm2_5) pm2_5, AVG(us_aqi) aqi "
                 "FROM minutes WHERE minute>=? AND minute<? GROUP BY b", (bucket, bucket, t0, t1)).fetchall()
         by = {r["b"]: r for r in rows}
@@ -145,10 +155,10 @@ class Storage:
 
     def events_csv(self, t0=None, t1=None) -> str:
         with self._lock:
-            rows = self._db.execute("SELECT ts,track_id,cls,line,direction,speed_kmh,is_first FROM events WHERE ts>=? AND ts<? ORDER BY ts",
+            rows = self._db.execute("SELECT ts,track_id,cls,line,direction,speed_kmh,is_first,via FROM events WHERE ts>=? AND ts<? ORDER BY ts",
                                     (t0 or 0, t1 or 4e9)).fetchall()
-        return self._csv(["waktu", "id_kendaraan", "jenis", "garis", "arah", "kecepatan_kmh", "kendaraan_unik"],
-                         [(_iso(r["ts"]), r["track_id"], r["cls"], r["line"], r["direction"], r["speed_kmh"], r["is_first"]) for r in rows])
+        return self._csv(["waktu", "id_kendaraan", "jenis", "garis", "arah", "kecepatan_kmh", "kendaraan_unik", "cara_hitung"],
+                         [(_iso(r["ts"]), r["track_id"], r["cls"], r["line"], r["direction"], r["speed_kmh"], r["is_first"], r["via"]) for r in rows])
 
     def minutes_csv(self, t0=None, t1=None) -> str:
         with self._lock:

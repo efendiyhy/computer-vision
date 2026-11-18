@@ -16,12 +16,16 @@ DEFAULT_STREAM_URL = (
 
 DEFAULTS: dict = {
     "source": DEFAULT_STREAM_URL,
-    "frame_width": 960,
+    "frame_width": 800,           # lebar frame yang diproses & ditampilkan (lebih kecil = lebih ringan)
     "detector": "ssd",            # "ssd" (MobileNet-SSD, bawaan) atau "yolo" (opsional, butuh ultralytics)
     "yolo_model": "yolov8n.pt",
-    "confidence": 0.40,
-    "detect_every": 2,            # deteksi setiap N frame (frame lain: prediksi tracker)
-    "min_box_px": 14,             # kotak lebih kecil dari ini diabaikan
+    "confidence": 0.35,
+    "quality": 2,                 # presisi deteksi: 1 cepat, 2 seimbang, 3 teliti (deteksi ubin)
+    "use_motion": True,           # bantu deteksi dengan pemisah latar (objek bergerak)
+    "allow_other": True,          # objek bergerak yang tak dikenali model tetap dihitung sebagai "Lainnya"
+    "min_box_px": 12,             # kotak lebih kecil dari ini diabaikan
+    "stream_fps": 20,             # batas frame/detik video yang dikirim ke browser
+    "jpeg_quality": 72,
     "classes": ["car", "motorbike", "bus", "truck", "bicycle"],
     "location": {"name": "Kota Malang", "lat": -7.9797, "lon": 112.6304},
     # Garis hitung (koordinat ternormalisasi 0..1). Arah 1 = sisi kiri vektor p1->p2.
@@ -33,16 +37,16 @@ DEFAULTS: dict = {
     "roi": [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]],
     "calibration": {"m_per_px": None, "ref_px": None, "ref_m": None},
     "speed_limit_kmh": 50,
-    "pcu": {"car": 1.0, "bus": 1.2, "truck": 1.2, "motorbike": 0.25, "bicycle": 0.2},
-    "display": {"boxes": True, "trails": True, "lines": True, "speed": True, "roi": True, "labels": True},
+    "pcu": {"car": 1.0, "bus": 1.2, "truck": 1.2, "motorbike": 0.25, "bicycle": 0.2, "other": 1.0},
+    "display": {"boxes": True, "trails": True, "lines": True, "speed": True, "roi": True, "labels": True, "raw": False},
     "log_dir": "data",
     "log_events": True,
 }
 
-CLASS_LABEL = {"car": "Mobil", "motorbike": "Motor", "bus": "Bus", "truck": "Truk", "bicycle": "Sepeda"}
-CLASS_COLOR = {  # BGR untuk OpenCV; versi hex di web/app.js
-    "car": (246, 173, 55), "motorbike": (60, 200, 255), "bus": (110, 214, 120),
-    "truck": (90, 120, 255), "bicycle": (230, 120, 220),
+CLASS_LABEL = {"car": "Mobil", "motorbike": "Motor", "bus": "Bus", "truck": "Truk", "bicycle": "Sepeda", "other": "Lainnya"}
+CLASS_COLOR = {  # BGR untuk OpenCV (palet Okabe-Ito, aman bagi buta warna); hex-nya ada di web/app.js
+    "car": (178, 114, 0), "motorbike": (0, 159, 230), "bus": (115, 158, 0),
+    "truck": (0, 94, 213), "bicycle": (167, 121, 204), "other": (145, 134, 122),
 }
 
 
