@@ -193,3 +193,33 @@ def test_updater_check_and_apply(tmp_path, monkeypatch):
     res = updater.apply()
     assert res["ok"] and (work / "a.txt").read_text() == "2"
     assert updater.check(force=True)["available"] is False
+
+
+def test_youtube_link_is_resolved(monkeypatch, tmp_path):
+    from emisisense_vision import resolver
+    vid = tmp_path / "v.avi"
+    w = cv2.VideoWriter(str(vid), cv2.VideoWriter_fourcc(*"MJPG"), 10, (160, 120))
+    for i in range(20):
+        w.write(np.full((120, 160, 3), i * 5, np.uint8))
+    w.release()
+    monkeypatch.setattr(resolver, "resolve", lambda url, max_height=720, force=False: {"url": str(vid), "title": "Jalan", "live": False, "height": 720, "protocol": "https"})
+    assert resolver.is_youtube("https://youtu.be/abc") and resolver.is_youtube("https://www.youtube.com/watch?v=abc")
+    assert not resolver.is_youtube("https://cctvmalang.24hour.id/x")
+    rd0 = open_source("https://www.youtube.com/watch?v=abc")
+    try:
+        ok, frame, _ = rd0.read()
+        assert ok and "YouTube" in rd0.desc and rd0.is_file
+    finally:
+        rd0.close()
+
+
+def test_youtube_errors_are_readable(monkeypatch):
+    from emisisense_vision import resolver
+    def boom(*a, **k): raise resolver.ResolveError("Tidak dapat menghubungi YouTube dari server ini.")
+    monkeypatch.setattr(resolver, "resolve", boom)
+    try:
+        open_source("https://youtu.be/abc")
+        assert False
+    except SourceError as e:
+        assert "YouTube" in str(e)
+    assert "bot" in resolver._friendly("ERROR: Sign in to confirm you're not a bot")

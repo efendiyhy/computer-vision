@@ -16,6 +16,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from . import resolver
+
 import cv2
 import numpy as np
 
@@ -202,6 +204,22 @@ def _classify(url: str, resp, head: bytes):
     return "unknown", ctype
 
 
+def _open_resolved(src: str):
+    try:
+        r = resolver.resolve(src)
+    except resolver.ResolveError as exc:
+        raise SourceError(str(exc)) from exc
+    kind = "hls" if (r["live"] or ".m3u8" in r["url"] or "m3u8" in r["protocol"]) else "video"
+    label = ("siaran langsung" if r["live"] else "video") + (f" {r['height']}p" if r.get("height") else "")
+    title = (r["title"] or "tanpa judul")[:60]
+    try:
+        return CvReader(r["url"], kind, f"YouTube/web: {title} ({label})", is_file=not r["live"])
+    except SourceError:
+        resolver._cache.clear()                                # alamat mungkin sudah kedaluwarsa; coba sekali lagi dengan yang baru
+        r = resolver.resolve(src, force=True)
+        return CvReader(r["url"], kind, f"YouTube/web: {title} ({label})", is_file=not r["live"])
+
+
 def open_source(src: str, depth: int = 0):
     """Kembalikan pembaca untuk 'src'. Melempar SourceError dengan pesan yang dapat ditindaklanjuti."""
     src = str(src).strip()
@@ -215,6 +233,8 @@ def open_source(src: str, depth: int = 0):
         return CvReader(src, "file", "Berkas video", is_file=True)
     if not src.lower().startswith(("http://", "https://")):
         return CvReader(src, "stream", "Aliran jaringan (RTSP/RTMP)")
+    if depth == 0 and resolver.is_youtube(src):
+        return _open_resolved(src)
     try:
         resp = urllib.request.urlopen(urllib.request.Request(src, headers=_headers(src)), timeout=12)
     except urllib.error.HTTPError as exc:
@@ -247,8 +267,13 @@ def open_source(src: str, depth: int = 0):
         m = _LINK2.search(text) or _LINK.search(text) or re.search(r"""<(?:img|video|source|iframe)[^>]+src=["']([^"']+)["']""", text, re.I)
         if m:
             return open_source(urllib.parse.urljoin(final, m.group(1)), depth + 1)
+        try:                                                  # cadangan: yt-dlp punya pengenal untuk banyak situs video
+            return _open_resolved(src)
+        except SourceError as exc:
+            if "belum terpasang" in str(exc):
+                raise
         raise SourceError("Alamat ini mengembalikan halaman web (HTML), bukan video, dan tidak ada tautan aliran di dalamnya. "
-                          "Gunakan alamat langsung ke aliran (.m3u8 / MJPEG / JPEG).")
+                          "Gunakan alamat langsung ke aliran (.m3u8 / MJPEG / JPEG), atau tautan YouTube.")
     resp.close()
     if kind == "unknown":                                    # coba serahkan ke FFmpeg
         return CvReader(final, "video", f"Aliran tidak dikenal ({ctype or 'tanpa tipe'})")

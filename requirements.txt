@@ -2,5 +2,6 @@ flask>=3.0
 opencv-python-headless>=4.9,<5      # OpenCV 5 menghapus pemuat model Caffe yang dipakai MobileNet-SSD
 numpy>=1.26
 scipy>=1.11
+yt-dlp>=2025.1.1               # membaca tautan YouTube (dan situs video lain) menjadi aliran langsung
 # Opsional (detektor YOLO, menambah kelas truk dan akurasi lebih baik):
 # ultralytics>=8.2

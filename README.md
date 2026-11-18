@@ -102,9 +102,13 @@ Bawaannya mendengarkan di semua antarmuka (`0.0.0.0`). Di jaringan bersama, paka
 | Zona pengamatan | Seret titik biru di video; kepadatan dihitung dan deteksi difokuskan di zona. Petunjuk editor tampil di bawah video, bukan di atasnya. |
 | Kecepatan | Skala otomatis dari ukuran khas jenis, atau **kalibrasi manual**. **Hanya estimasi.** |
 | Cuaca & udara | Open-Meteo: suhu, kelembapan, angin, hujan, prakiraan, US AQI, PM2,5, PM10, NO₂, CO, SO₂, O₃. |
-| Sumber & lokasi | Ganti sumber video (URL, HLS, MJPEG, JPEG, RTSP, berkas, kamera USB) dengan **Tes koneksi** yang melaporkan jenis, resolusi, dan fps nyata; ganti lokasi cuaca. |
+| Sumber & lokasi | Ganti sumber video (URL, HLS, MJPEG, JPEG, RTSP, **tautan YouTube**, berkas, kamera USB) dengan **Tes koneksi** yang melaporkan jenis, resolusi, dan fps nyata; ganti lokasi cuaca. |
 | Diagnosa | Menu Sistem menampilkan fps masuk/keluar, waktu per deteksi, objek mentah dan objek gerak. Banner di Pemantauan menjelaskan bila video tidak tersambung, terlalu lambat dari sumbernya, atau belum ada hitungan. |
 | Data tersimpan | Lihat di bawah. |
+
+### Tautan YouTube
+
+Tempel tautan `youtube.com/watch?...` atau `youtu.be/...` di **Sumber & lokasi**. Aplikasi memakai `yt-dlp` untuk mendapatkan aliran langsungnya dan menyegarkannya otomatis (video biasa diputar berulang, siaran langsung diikuti). Bila gagal: perbarui `yt-dlp` (`.venv/bin/pip install -U yt-dlp`), atau unduh videonya lalu unggah berkasnya. YouTube kadang menolak permintaan dari IP server.
 
 ### Bila video lambat atau tidak ada hitungan
 
