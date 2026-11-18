@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EmisiSense Vision · Dasbor Lalu Lintas & Cuaca</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e1b2b'/%3E%3Cpath d='M6 21h20M9 21l2-6h10l2 6' stroke='%2337adf6' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='11' cy='22' r='1.6' fill='%2337adf6'/%3E%3Ccircle cx='21' cy='22' r='1.6' fill='%2337adf6'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#12263d"/><path d="M5 21h22M8.5 21l2.2-6.5h10.6l2.2 6.5" stroke="#37adf6" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="22.5" r="1.7" fill="#37adf6"/><circle cx="21" cy="22.5" r="1.7" fill="#37adf6"/><path d="M12 9c1.5-2 3-2 4 0s2.500 2 4 0" stroke="#78d66e" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+    <div><h1>EmisiSense <span>Vision</span></h1><p>Pemantauan lalu lintas &amp; cuaca waktu nyata · Lab AQHI, Universitas Brawijaya</p></div>
+  </div>
+  <div class="top-right">
+    <span id="pill" class="pill pill-wait"><i></i><b id="pillText">Menghubungkan</b></span>
+    <span class="clock" id="clock">--:--:--</span>
+    <button class="btn" id="btnSettings" title="Pengaturan">⚙ Pengaturan</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="card video-card">
+    <div class="card-head">
+      <h2>Kamera &amp; deteksi</h2>
+      <div class="tools">
+        <button class="chip" id="tPause" title="Jeda / lanjut">⏸ Jeda</button>
+        <button class="chip" id="tLines" title="Atur garis hitung">╱ Garis</button>
+        <button class="chip" id="tRoi" title="Atur zona pengamatan">▢ Zona</button>
+        <button class="chip" id="tCal" title="Kalibrasi kecepatan">📏 Kalibrasi</button>
+        <a class="chip" href="/snapshot.jpg" title="Simpan gambar">📷 Foto</a>
+      </div>
+    </div>
+    <div class="stage" id="stage">
+      <img id="video" alt="Video CCTV dengan deteksi" src="/video">
+      <canvas id="overlay"></canvas>
+      <div class="hud hud-l"><span id="hudFps">– FPS</span><span id="hudDet">–</span><span id="hudLat">–</span></div>
+      <div class="hud hud-r" id="hudSrc"></div>
+      <div class="banner" id="banner" hidden></div>
+      <div class="editbar" id="editbar" hidden></div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="toggles" id="toggles"></div>
+  </section>
+
+  <section class="col-right">
+    <div class="card weather" id="weatherCard">
+      <div class="card-head"><h2>Cuaca &amp; kualitas udara</h2><span class="muted small" id="wxSrc">Open-Meteo</span></div>
+      <div id="wxBody" class="skeleton-box">Memuat data cuaca…</div>
+    </div>
+    <div class="card kpis" id="kpis"></div>
+  </section>
+
+  <section class="card span2" id="trafficCard">
+    <div class="card-head"><h2>Arus lalu lintas · 30 menit terakhir</h2>
+      <div class="seg" id="segMetric"><button class="on" data-m="count">Kendaraan</button><button data-m="pcu">SMP</button></div></div>
+    <div id="chartMin" class="chart"></div>
+  </section>
+
+  <section class="card" id="compCard">
+    <div class="card-head"><h2>Komposisi jenis</h2></div>
+    <div id="chartComp" class="chart donut"></div>
+  </section>
+
+  <section class="card" id="speedCard">
+    <div class="card-head"><h2>Kecepatan <span class="tag" title="Perkiraan dari piksel; kalibrasi untuk hasil lebih akurat">estimasi</span></h2></div>
+    <div id="speedStats" class="speed-stats"></div>
+    <div id="chartSpeed" class="chart"></div>
+  </section>
+
+  <section class="card" id="zoneCard">
+    <div class="card-head"><h2>Kepadatan zona</h2></div>
+    <div id="zoneBody"></div>
+  </section>
+
+  <section class="card" id="linesCard">
+    <div class="card-head"><h2>Garis hitung &amp; arah</h2></div>
+    <div id="linesBody"></div>
+  </section>
+
+  <section class="card span2" id="tracksCard">
+    <div class="card-head"><h2>Kendaraan terlacak</h2><span class="muted small" id="trackCount"></span></div>
+    <div class="tablewrap"><table id="tracksTbl"><thead><tr><th>ID</th><th>Jenis</th><th>Kecepatan</th><th>Yakin</th><th>Zona</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card span2" id="eventsCard">
+    <div class="card-head"><h2>Kejadian lintas terbaru</h2>
+      <div class="tools"><a class="chip" href="/api/export/events.csv">⬇ CSV kejadian</a><a class="chip" href="/api/export/minutes.csv">⬇ CSV per menit</a><button class="chip" id="btnReset">↺ Reset hitungan</button></div></div>
+    <ul id="events" class="events"></ul>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Sumber video acuan: <a id="srcLink" href="#" target="_blank" rel="noopener">CCTV Kota Malang</a></span>
+  <span>Cuaca: Open-Meteo · Deteksi: <b id="footDet">-</b> · Kecepatan &amp; SMP bersifat perkiraan</span>
+</footer>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head"><h2>Pengaturan</h2><button class="btn" id="btnCloseSettings">✕</button></div>
+  <div class="drawer-body" id="settingsBody"></div>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+<div class="toast" id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
