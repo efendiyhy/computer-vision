@@ -135,6 +135,34 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
                 yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
         return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+    @app.get("/video/raw")
+    def video_raw():
+        """MJPEG bersih (tanpa gambar tambahan) agar program lain bisa memakai kamera yang sama. ?fps=1..30 (bawaan 10)."""
+        try:
+            fps = min(30.0, max(1.0, float(request.args.get("fps", 10))))
+        except ValueError:
+            fps = 10.0
+
+        def gen():
+            seq, last = 0, 0.0
+            while True:
+                seq, jpg = pipe.raw_jpeg(seq)
+                if jpg is None:
+                    time.sleep(0.1); continue
+                wait = 1.0 / fps - (time.time() - last)
+                if wait > 0:
+                    time.sleep(wait)
+                last = time.time()
+                yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
+        return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+    @app.get("/snapshot/raw.jpg")
+    def snapshot_raw():
+        _, jpg = pipe.raw_jpeg(-1, 3.0)
+        if jpg is None:
+            return jsonify({"error": "belum ada frame"}), 503
+        return Response(jpg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
     @app.get("/api/record")
     def record_status():
         return jsonify(recorder.status())

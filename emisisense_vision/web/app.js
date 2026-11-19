@@ -673,6 +673,13 @@ setInterval(() => $("#clock").textContent = new Date().toLocaleTimeString("id-ID
 const syncClock = () => fetch("/api/time", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t: Date.now() / 1000 }) }).catch(() => {});
 syncClock(); setInterval(syncClock, 600000);
 
+// ---- Alamat video untuk program lain
+{
+  const o = location.origin;
+  const rows = [["Aliran video (MJPEG)", `${o}/video/raw`], ["Satu gambar (JPEG)", `${o}/snapshot/raw.jpg`], ["Dengan garis & deteksi", `${o}/video`], ["Python / OpenCV", `cv2.VideoCapture("${o}/video/raw")`]];
+  $("#vidInfo").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="selectable" style="word-break:break-all">${esc(v)}</dd>`).join("");
+}
+
 // ---- Jaringan Orange Pi: hotspot atau Wi-Fi pilihan
 let netPoll = null;
 async function netLoad() {

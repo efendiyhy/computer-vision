@@ -315,6 +315,17 @@ class Pipeline:
                     self.status["stream_fps"] = round(fps_n / (last_emit - fps_t), 1)
                     fps_t, fps_n = last_emit, 0
 
+    def raw_jpeg(self, seq: int, timeout: float = 2.0, quality: int = 88):
+        """Frame mentah terbaru (tanpa garis/kotak/watermark) untuk program lain; di-encode hanya saat diminta."""
+        with self._frame_cv:
+            if self._latest is None or self._latest[2] == seq:
+                self._frame_cv.wait(timeout)
+            item = self._latest
+        if item is None or item[2] == seq:
+            return seq, None
+        ok, buf = cv2.imencode(".jpg", item[0], [cv2.IMWRITE_JPEG_QUALITY, quality])
+        return item[2], (buf.tobytes() if ok else None)
+
     def _draw(self, frame: np.ndarray, ts: float, cfg) -> np.ndarray:
         img = frame.copy()
         H, W = img.shape[:2]

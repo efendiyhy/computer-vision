@@ -205,3 +205,15 @@ cd ~/emisisense-vision && git pull && sudo ./hotspot/install-hotspot.sh
 - Tanpa internet, jam Orange Pi dikoreksi otomatis dari ponsel/browser yang terhubung. Semua waktu memakai WIB (GMT+7).
 - Aplikasi Android: tombol “Pakai hotspot Orange Pi” mengisi 10.42.0.1 dan mengikat aplikasi ke Wi-Fi agar tidak dialihkan ke data seluler.
 - CLI: `sudo emisisense-net status|scan|hotspot|boot`, `echo '{"ssid":"NAMA","password":"SANDI"}' | sudo emisisense-net connect`.
+
+## Memakai video untuk program lain
+
+Kamera hanya bisa dibuka satu program. Biarkan dashboard memegang kamera, lalu program lain membaca videonya lewat jaringan (tanpa garis/kotak/watermark):
+
+| Alamat | Isi |
+|---|---|
+| `http://IP:5000/video/raw` | aliran MJPEG bersih (`?fps=1..30`, bawaan 10) |
+| `http://IP:5000/snapshot/raw.jpg` | satu gambar JPEG terbaru |
+| `http://IP:5000/video` | aliran dengan garis & deteksi |
+
+Di Orange Pi sendiri pakai `127.0.0.1` sebagai IP. Contoh Python: `cv2.VideoCapture("http://127.0.0.1:5000/video/raw")`. Bila dashboard memakai `--password`, sertakan: `http://:KATA@127.0.0.1:5000/video/raw`.
