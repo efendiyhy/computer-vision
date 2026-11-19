@@ -282,3 +282,90 @@ label.check.inl{display:inline-flex;gap:6px;align-items:center;margin:0;font-siz
 #tblRec td.num .btn{margin-left:4px}
 .modal video{width:100%;max-height:62vh;background:#000;border-radius:6px;display:block}
 .modal.wide{width:min(900px,100%)}
+
+/* =====================================================================================================
+   Tampilan ponsel (Android): navigasi tab di bawah, target sentuh besar, popup berupa lembar bawah
+   ===================================================================================================== */
+.app-only{display:none}
+html.native .app-only{display:block}
+html.native{-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+html.native body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html.native input,html.native textarea,html.native pre,html.native .selectable{-webkit-user-select:text;user-select:text}
+html.native .foot,html.native .rail-toggle,html.native #tFull{display:none}
+
+@media (max-width:860px){
+  html{scroll-padding-bottom:84px}
+  body{padding-bottom:calc(66px + env(safe-area-inset-bottom,0px))}
+  /* tab bawah */
+  .app{display:block}
+  .rail{position:fixed;left:0;right:0;bottom:0;top:auto;height:auto;z-index:60;flex-direction:row;align-items:stretch;justify-content:stretch;
+    padding:0 4px env(safe-area-inset-bottom,0px);overflow:visible;gap:0;box-shadow:0 -1px 0 rgba(255,255,255,.07)}
+  .brand,.rail-foot,.rail-toggle{display:none!important}
+  #nav{flex-direction:row;width:100%;gap:2px;padding:6px 0}
+  #nav a{flex:1;min-width:0;flex-direction:column;justify-content:center;gap:3px;padding:7px 2px 6px;border-radius:14px;font-size:11px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+  #nav a span{display:none!important}
+  #nav a::after{content:attr(data-short);display:block;line-height:1.1}
+  #nav a svg{width:22px;height:22px;opacity:.8}
+  #nav a.on{background:rgba(255,255,255,.12);color:#fff}
+  #nav a.on svg{opacity:1;stroke:var(--paint)}
+  #nav a.on::before{display:none}
+  #nav a:active{background:rgba(255,255,255,.18)}
+  .dot-badge{position:absolute;top:6px;right:calc(50% - 20px);margin:0}
+  :root[data-rail=min] #nav a{padding:7px 2px 6px}
+  html.kb .rail{display:none}html.kb body{padding-bottom:0}
+  /* bilah atas */
+  .top{padding:12px 16px 6px;gap:10px;position:sticky;top:0;z-index:20;background:var(--bg)}
+  .top-title h1{font-size:20px}
+  .where,#clock,.lane-wrap{display:none}
+  .status{padding:4px 10px 4px 8px;font-size:12px}.status small{display:none}
+  .icon-btn{width:40px;height:40px}
+  main{padding:8px 12px 8px}
+  .row,.live-grid,.live-main{gap:12px}
+  /* panel dan tombol */
+  .panel{padding:14px;border-radius:12px}
+  .panel-head{margin-bottom:10px}.panel-head h2{font-size:15px}
+  .btn{min-height:44px;padding:10px 16px;border-radius:10px;font-size:14px}
+  .btn.sm{min-height:38px;padding:8px 13px;border-radius:9px;font-size:13px}
+  .btn:active{filter:brightness(.9);transform:scale(.98)}
+  .seg button{min-height:38px;padding:8px 12px}
+  input[type=text],input[type=number],input[type=date],select,textarea{font-size:16px;min-height:44px}
+  .fld input[type=text],.fld input[type=number],.fld select,.fld input[type=date],.export input{padding:11px 12px;border-radius:10px}
+  input[type=range]{min-height:36px}
+  .check input,.checks input{width:20px;height:20px}
+  .checks label,.chk label{min-height:40px}
+  /* kamera: video selebar panel, tombol bisa digeser ke samping */
+  #v-live .panel:first-child .tools{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -14px;padding:2px 14px 6px}
+  #v-live .panel:first-child .tools::-webkit-scrollbar{display:none}
+  #v-live .panel:first-child .tools .btn{flex:none}
+  .stage{margin:0 -14px;border-radius:0;max-height:none;width:calc(100% + 28px)}
+  .viewbar{gap:8px}.legend{font-size:12px;gap:4px 12px}
+  .toggles{display:flex;gap:6px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;margin:0 -14px;padding:2px 14px 4px}
+  .toggles::-webkit-scrollbar{display:none}.toggles button{flex:none;min-height:36px}
+  .editor{margin:10px -2px 0;padding:12px}
+  .editor .tools{gap:8px}.editor .tools .btn{flex:1 1 auto}
+  .editor select{max-width:100%;flex:1 1 100%}
+  /* tabel dan grafik */
+  .tablewrap{max-height:none;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tablewrap table{min-width:460px}
+  .readout .big .n{font-size:44px}
+  .kv{grid-template-columns:minmax(96px,40%) 1fr}
+  .wind-wide{grid-template-columns:minmax(0,1fr)}
+  .wind-wide>*{min-width:0}#windNote{overflow-x:auto}#windNote table{min-width:0}
+  .grid6{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid2{grid-template-columns:1fr}
+  .export{flex-direction:column;align-items:stretch}.export .btn{justify-content:center}
+  .foot{padding:12px 16px 20px;flex-direction:column}
+  pre{font-size:11.5px}
+  /* popup menjadi lembar bawah */
+  .modal-back{align-items:end;padding:0}
+  .modal{width:100%;max-height:90vh;border-radius:18px 18px 0 0;border-bottom:0;animation:sheetup .22s ease-out}
+  .modal.wide{width:100%}
+  .modal-head{padding-top:18px;position:relative}
+  .modal-head::before{content:"";position:absolute;top:7px;left:50%;width:38px;height:4px;margin-left:-19px;border-radius:2px;background:var(--line)}
+  .modal-x{width:40px;height:40px;border-radius:50%}
+  .modal-foot{padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))}
+  .modal-foot .btn{flex:1}
+  .toast{bottom:calc(86px + env(safe-area-inset-bottom,0px));max-width:88vw;text-align:center}
+}
+@keyframes sheetup{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.modal{animation:none}}

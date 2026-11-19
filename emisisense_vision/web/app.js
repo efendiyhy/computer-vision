@@ -31,7 +31,23 @@ $("#themeBtn").onclick = () => {
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem("ev-theme", next); } catch (e) {}
   if (S) render();
+  syncBars();
 };
+/* jembatan ke aplikasi Android (ada hanya di dalam aplikasi) */
+const NA = () => window.EmisiApp || null;
+function syncBars() {
+  const a = NA(); if (!a || !a.setBars) return;
+  const cs = getComputedStyle(document.documentElement), dark = (document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
+  const top = cs.getPropertyValue("--bg").trim() || "#ecf0f3", bot = cs.getPropertyValue("--rail").trim() || "#1c232b";
+  try { a.setBars(top, bot, dark); } catch (e) { /* abaikan */ }
+}
+const isApp = document.documentElement.classList.contains("native");
+if (isApp) {
+  addEventListener("focusin", e => { if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) document.documentElement.classList.add("kb"); });
+  addEventListener("focusout", () => document.documentElement.classList.remove("kb"));
+  document.addEventListener("DOMContentLoaded", () => { syncBars(); const a = NA(); if (a) { $("#appInfo").innerHTML = `<dt>Server</dt><dd>${esc(a.server ? a.server() : location.host)}</dd><dt>Aplikasi</dt><dd>${esc(a.version ? a.version() : "")}</dd>`; $("#appChange").onclick = () => a.changeServer(); } });
+  $$("#nav a").forEach(a => a.addEventListener("click", () => { try { NA()?.tick?.(); } catch (e) { /* abaikan */ } }));
+}
 const TITLES = { live: "Pemantauan", history: "Riwayat", source: "Sumber & lokasi", detect: "Deteksi", system: "Sistem" };
 function route() {
   const v = (location.hash || "#live").slice(1);
@@ -389,6 +405,7 @@ function calModal() {
 function setMode(m) {
   mode = mode === m ? null : m; calPts = [];
   stage.classList.toggle("editing", !!mode);
+  try { NA()?.lockRefresh?.(!!mode); } catch (e) { /* abaikan */ }
   [["lines", "#tLines"], ["roi", "#tRoi"], ["cal", "#tCal"]].forEach(([k, s]) => $(s).classList.toggle("on", mode === k));
   renderEditor(); drawOverlay();
 }
