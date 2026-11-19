@@ -328,3 +328,29 @@ def test_recorder_writes_playable_file(tmp_path):
     assert ok and fr.shape[:2] == (240, 320)
     assert rec.path_of("../../etc/passwd") is None and not rec.delete("nama-ngawur.mp4")
     assert rec.delete(items[0]["name"]) and rec.list() == []
+
+
+def _net():
+    from importlib.machinery import SourceFileLoader
+    return SourceFileLoader("emisisense_net", str(Path(__file__).resolve().parent.parent / "hotspot" / "emisisense-net")).load_module()
+
+
+def test_net_terse_parsing_and_validation():
+    n = _net()
+    assert n.terse(r"*:Lab\:AQHI:82:WPA2") == ["*", "Lab:AQHI", "82", "WPA2"]
+    assert n.terse(":Kampus Guest:45:") == ["", "Kampus Guest", "45", ""]
+    assert n.valid_ssid("Lab AQHI") and not n.valid_ssid("") and not n.valid_ssid("x" * 33) and not n.valid_ssid("a\nb")
+    assert n.valid_pass("") and n.valid_pass("12345678") and not n.valid_pass("1234567") and not n.valid_pass("x" * 64)
+
+
+def test_net_default_config_is_hotspot_first(monkeypatch, tmp_path):
+    n = _net()
+    monkeypatch.setattr(n, "CFG", str(tmp_path / "net.json"))
+    monkeypatch.setattr(n, "wifi_dev", lambda: None)
+    cfg = n.load_cfg()
+    assert cfg["mode"] == "hotspot" and cfg["ip"] == "10.42.0.1/24" and len(cfg["password"]) >= 8 and cfg["ssid"].startswith("EmisiSense-")
+
+
+def test_net_settime_rejects_nonsense():
+    n = _net()
+    assert n.cmd_settime("abc") == 2 and n.cmd_settime("100") == 2

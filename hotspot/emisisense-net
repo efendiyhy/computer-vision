@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""emisisense-net - pengatur jaringan Orange Pi untuk EmisiSense Vision (butuh root + NetworkManager).
+
+  emisisense-net status             # status JSON (mode, SSID, IP)
+  emisisense-net scan               # daftar Wi-Fi sekitar (JSON)
+  emisisense-net hotspot            # nyalakan hotspot Orange Pi (stdin opsional: {"ssid":..,"password":..})
+  emisisense-net connect            # sambung ke Wi-Fi; stdin: {"ssid":"..","password":".."}
+  emisisense-net boot               # dipanggil saat boot oleh emisisense-net.service
+  emisisense-net settime EPOCH      # setel jam bila belum sinkron NTP (hotspot tanpa internet)
+
+Aturan: hotspot dulu. Memilih Wi-Fi lain bersifat sementara-aman: bila gagal tersambung,
+hotspot otomatis dinyalakan kembali sehingga Orange Pi selalu dapat dijangkau.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+CFG = "/etc/emisisense/net.json"
+RES = "/run/emisisense-net.json"
+AP = "EmisiSense-AP"
+DEFAULTS = {"mode": "hotspot", "ssid": "", "client": "", "password": "emisisense123", "ip": "10.42.0.1/24"}
+
+
+def sh(*a, timeout=40):
+    try:
+        p = subprocess.run(list(a), capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, "", str(e)
+
+
+def terse(line):
+    """Pisahkan baris `nmcli -t` pada ':' yang tidak di-escape."""
+    return [p.replace("\\:", ":").replace("\\\\", "\\") for p in re.split(r"(?<!\\):", line)]
+
+
+def load_cfg():
+    cfg = dict(DEFAULTS)
+    try:
+        with open(CFG) as f:
+            cfg.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    if not cfg.get("ssid"):
+        cfg["ssid"] = default_ssid()
+    return cfg
+
+
+def save_cfg(cfg):
+    os.makedirs(os.path.dirname(CFG), exist_ok=True)
+    tmp = CFG + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=1)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, CFG)
+
+
+def wifi_dev():
+    rc, out, _ = sh("nmcli", "-t", "-f", "DEVICE,TYPE", "dev")
+    for ln in out.splitlines():
+        d = terse(ln)
+        if len(d) >= 2 and d[1] == "wifi":
+            return d[0]
+    return None
+
+
+def default_ssid():
+    dev = wifi_dev()
+    try:
+        mac = open(f"/sys/class/net/{dev}/address").read().strip().replace(":", "")[-4:].upper()
+    except (OSError, TypeError):
+        mac = "0001"
+    return f"EmisiSense-{mac}"
+
+
+def write_result(state, **kw):
+    try:
+        with open(RES, "w") as f:
+            json.dump({"state": state, "t": int(time.time()), **kw}, f)
+        os.chmod(RES, 0o644)
+    except OSError:
+        pass
+
+
+def read_result():
+    try:
+        with open(RES) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def active_wifi():
+    """-> (nama koneksi aktif di perangkat Wi-Fi atau None, IPv4 atau '')."""
+    dev = wifi_dev()
+    if not dev:
+        return None, ""
+    rc, out, _ = sh("nmcli", "-t", "-f", "GENERAL.CONNECTION,IP4.ADDRESS", "dev", "show", dev)
+    name, ip = None, ""
+    for ln in out.splitlines():
+        k, _, v = ln.partition(":")
+        if k == "GENERAL.CONNECTION" and v and v != "--":
+            name = v
+        elif k.startswith("IP4.ADDRESS") and v and not ip:
+            ip = v.split("/")[0]
+    return name, ip
+
+
+def all_ips():
+    rc, out, _ = sh("hostname", "-I", timeout=5)
+    return [i for i in out.split() if i.count(".") == 3 and not i.startswith("169.254.")]
+
+
+def valid_ssid(s):
+    return isinstance(s, str) and 1 <= len(s.encode()) <= 32 and not re.search(r"[\x00-\x1f]", s)
+
+
+def valid_pass(p):
+    return isinstance(p, str) and (p == "" or 8 <= len(p) <= 63) and "\x00" not in p
+
+
+def read_json_stdin():
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        return json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return {}
+
+
+def start_hotspot(cfg, quiet=False):
+    dev = wifi_dev()
+    if not dev:
+        return False, "Perangkat Wi-Fi tidak ditemukan"
+    sh("rfkill", "unblock", "wifi", timeout=5)
+    sh("nmcli", "radio", "wifi", "on", timeout=10)
+    sh("nmcli", "con", "delete", "id", AP, timeout=15)
+    rc, _, err = sh("nmcli", "con", "add", "type", "wifi", "ifname", dev, "con-name", AP, "autoconnect", "no",
+                    "ssid", cfg["ssid"], "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+                    "802-11-wireless.channel", "6", "ipv4.method", "shared", "ipv4.addresses", cfg["ip"],
+                    "ipv6.method", "ignore", "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", cfg["password"])
+    if rc != 0:
+        return False, err or "Gagal membuat profil hotspot"
+    if cfg.get("client"):  # jangan biarkan Wi-Fi lama merebut perangkat
+        sh("nmcli", "con", "modify", "id", cfg["client"], "connection.autoconnect", "no", timeout=15)
+    rc, _, err = sh("nmcli", "con", "up", "id", AP, "ifname", dev, timeout=60)
+    if rc != 0:
+        return False, err or "Hotspot gagal menyala (perangkat Wi-Fi mungkin tidak mendukung mode AP)"
+    return True, ""
+
+
+def cmd_hotspot():
+    cfg = load_cfg()
+    body = read_json_stdin()
+    if "ssid" in body:
+        if not valid_ssid(body["ssid"]):
+            return fail("Nama hotspot tidak valid (1-32 karakter)")
+        cfg["ssid"] = body["ssid"]
+    if body.get("password"):
+        if not valid_pass(body["password"]) or body["password"] == "":
+            return fail("Kata sandi hotspot harus 8-63 karakter")
+        cfg["password"] = body["password"]
+    cfg["mode"] = "hotspot"
+    save_cfg(cfg)
+    write_result("connecting", target="hotspot")
+    time.sleep(2)  # beri waktu jawaban HTTP terkirim sebelum jaringan berpindah
+    ok, msg = start_hotspot(cfg)
+    write_result("ok" if ok else "error", target="hotspot", ssid=cfg["ssid"], ip=cfg["ip"].split("/")[0], message=msg)
+    print(json.dumps({"ok": ok, "message": msg}))
+    return 0 if ok else 1
+
+
+def fail(msg):
+    print(json.dumps({"ok": False, "message": msg}))
+    return 2
+
+
+def cmd_connect():
+    body = read_json_stdin()
+    ssid, pw = body.get("ssid", ""), body.get("password", "")
+    if not valid_ssid(ssid) or not valid_pass(pw):
+        return fail("Nama Wi-Fi atau kata sandi tidak valid")
+    cfg = load_cfg()
+    dev = wifi_dev()
+    if not dev:
+        return fail("Perangkat Wi-Fi tidak ditemukan")
+    write_result("connecting", target="wifi", ssid=ssid)
+    time.sleep(3)
+    sh("nmcli", "con", "down", "id", AP, timeout=20)
+    sh("nmcli", "con", "delete", "id", ssid, timeout=15)
+    args = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", dev]
+    if pw:
+        args += ["password", pw]
+    rc, _, err = sh(*args, timeout=70)
+    ip = ""
+    if rc == 0:
+        for _ in range(20):  # tunggu DHCP
+            name, ip = active_wifi()
+            if ip:
+                break
+            time.sleep(1)
+    if rc == 0 and ip:
+        sh("nmcli", "con", "modify", "id", ssid, "connection.autoconnect", "yes", "connection.autoconnect-priority", "10")
+        cfg.update({"mode": "wifi", "client": ssid})
+        save_cfg(cfg)
+        write_result("ok", target="wifi", ssid=ssid, ip=ip)
+        print(json.dumps({"ok": True, "ip": ip}))
+        return 0
+    # gagal: kembali ke hotspot agar tetap bisa dijangkau
+    sh("nmcli", "con", "delete", "id", ssid, timeout=15)
+    reason = "Kata sandi salah atau Wi-Fi tidak terjangkau" if rc != 0 else "Tersambung tetapi tidak mendapat alamat IP"
+    cfg["mode"] = "hotspot"
+    save_cfg(cfg)
+    ok, msg = start_hotspot(cfg)
+    write_result("error", target="wifi", ssid=ssid, message=reason + ("; hotspot dinyalakan kembali" if ok else ""))
+    print(json.dumps({"ok": False, "message": reason}))
+    return 1
+
+
+def cmd_scan():
+    dev = wifi_dev()
+    if not dev:
+        print(json.dumps({"ok": False, "message": "Perangkat Wi-Fi tidak ditemukan", "networks": []}))
+        return 1
+    sh("nmcli", "dev", "wifi", "rescan", "ifname", dev, timeout=15)
+    time.sleep(3)
+    rc, out, err = sh("nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "ifname", dev)
+    best = {}
+    for ln in out.splitlines():
+        d = terse(ln)
+        if len(d) < 4 or not d[1] or d[1] == AP or d[1].startswith("EmisiSense-"):
+            continue
+        try:
+            sig = int(d[2])
+        except ValueError:
+            sig = 0
+        n = {"ssid": d[1], "signal": sig, "secure": d[3] not in ("", "--"), "inuse": d[0] == "*"}
+        if d[1] not in best or sig > best[d[1]]["signal"]:
+            best[d[1]] = n
+    nets = sorted(best.values(), key=lambda x: -x["signal"])
+    print(json.dumps({"ok": True, "networks": nets}))
+    return 0
+
+
+def cmd_status():
+    cfg = load_cfg()
+    dev = wifi_dev()
+    name, ip = active_wifi()
+    if not dev:
+        state = "no-wifi"
+    elif name == AP:
+        state = "hotspot"
+    elif name and ip:
+        state = "wifi"
+    else:
+        state = "disconnected"
+    print(json.dumps({
+        "ok": True, "available": True, "device": dev, "state": state, "mode": cfg["mode"],
+        "ssid": cfg["ssid"] if state == "hotspot" else (name if state == "wifi" else ""),
+        "hotspot": {"ssid": cfg["ssid"], "password": cfg["password"], "ip": cfg["ip"].split("/")[0]},
+        "ip": ip, "ips": all_ips(), "last": read_result(),
+    }))
+    return 0
+
+
+def cmd_boot():
+    cfg = load_cfg()
+    if not wifi_dev():
+        for _ in range(12):  # tunggu driver Wi-Fi muncul
+            time.sleep(5)
+            if wifi_dev():
+                break
+    if cfg["mode"] == "wifi" and cfg.get("client"):
+        for _ in range(15):  # NetworkManager menyambung sendiri (autoconnect)
+            name, ip = active_wifi()
+            if name and name != AP and ip:
+                write_result("ok", target="wifi", ssid=name, ip=ip)
+                return 0
+            time.sleep(3)
+        sh("nmcli", "con", "up", "id", cfg["client"], timeout=40)
+        name, ip = active_wifi()
+        if name and name != AP and ip:
+            write_result("ok", target="wifi", ssid=name, ip=ip)
+            return 0
+        write_result("error", target="wifi", ssid=cfg["client"], message="Wi-Fi tidak terjangkau saat boot; hotspot dinyalakan")
+    ok = False
+    for _ in range(3):
+        ok, msg = start_hotspot(cfg)
+        if ok:
+            break
+        time.sleep(5)
+    if cfg["mode"] != "wifi":
+        write_result("ok" if ok else "error", target="hotspot", ssid=cfg["ssid"], ip=cfg["ip"].split("/")[0])
+    return 0 if ok else 1
+
+
+def cmd_settime(arg):
+    try:
+        t = int(float(arg))
+    except (TypeError, ValueError):
+        return fail("Waktu tidak valid")
+    if not (1735689600 <= t <= 4102444800):  # 2025-01-01 .. 2100
+        return fail("Waktu di luar rentang wajar")
+    rc, out, _ = sh("timedatectl", "show", "-p", "NTPSynchronized", "--value", timeout=5)
+    if out.strip() == "yes":
+        print(json.dumps({"ok": True, "changed": False, "reason": "ntp"}))
+        return 0
+    diff = t - time.time()
+    if abs(diff) < 60:
+        print(json.dumps({"ok": True, "changed": False, "diff": diff}))
+        return 0
+    rc, _, err = sh("date", "-u", "-s", f"@{t}", timeout=5)
+    sh("hwclock", "--systohc", timeout=5)
+    print(json.dumps({"ok": rc == 0, "changed": rc == 0, "diff": diff, "message": err}))
+    return 0 if rc == 0 else 1
+
+
+def main():
+    if os.geteuid() != 0:
+        print("Jalankan dengan sudo.", file=sys.stderr)
+        return 126
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if cmd in ("status", "scan", "connect", "hotspot", "boot", "settime") and not shutil_which("nmcli") and cmd != "settime":
+        print(json.dumps({"ok": False, "available": False, "message": "NetworkManager (nmcli) tidak terpasang"}))
+        return 3
+    if cmd == "status":
+        return cmd_status()
+    if cmd == "scan":
+        return cmd_scan()
+    if cmd == "connect":
+        return cmd_connect()
+    if cmd == "hotspot":
+        return cmd_hotspot()
+    if cmd == "boot":
+        return cmd_boot()
+    if cmd == "settime":
+        return cmd_settime(sys.argv[2] if len(sys.argv) > 2 else "")
+    print(__doc__)
+    return 1
+
+
+def shutil_which(x):
+    import shutil
+    return shutil.which(x)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

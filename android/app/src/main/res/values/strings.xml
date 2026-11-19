@@ -5,6 +5,8 @@
     <string name="hint_password">Kata sandi</string>
     <string name="connect">Hubungkan</string>
     <string name="connecting">Menghubungkan…</string>
+    <string name="use_hotspot">Pakai hotspot Orange Pi (10.42.0.1)</string>
+    <string name="hotspot_hint">Belum tersambung? Sambungkan ponsel ke hotspot Orange Pi (nama EmisiSense-xxxx), lalu tekan tombol di atas. Android mungkin bertanya 'Wi-Fi tanpa internet'; pilih tetap tersambung.</string>
     <string name="help">Masukkan alamat IP Orange Pi. Port 5000 dipakai otomatis. Ponsel harus satu jaringan dengan perangkat.</string>
     <string name="err_empty">Isi alamat IP terlebih dahulu.</string>
     <string name="err_unreachable">Tidak dapat terhubung. Periksa alamat IP, port, dan pastikan ponsel satu jaringan dengan Orange Pi.</string>

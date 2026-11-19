@@ -369,3 +369,9 @@ html.native .foot,html.native .rail-toggle,html.native #tFull{display:none}
 }
 @keyframes sheetup{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
 @media (prefers-reduced-motion:reduce){.modal{animation:none}}
+
+.netlist{display:flex;flex-direction:column;gap:6px;margin:12px 0}
+.net-row{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:46px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.net-row:hover{border-color:var(--accent,#1550d8)}.net-row:active{background:var(--bg)}
+.net-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.net-meta{color:var(--mute);white-space:nowrap}
+.net-sig{letter-spacing:-1px;color:var(--accent,#1550d8)}

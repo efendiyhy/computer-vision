@@ -12,6 +12,7 @@ import os
 import signal
 import sys
 import threading
+import time
 import webbrowser
 
 from emisisense_vision import netinfo
@@ -20,6 +21,10 @@ from emisisense_vision.server import create_app
 
 
 def main():
+    # Semua waktu (pencatatan, rekaman, tampilan) memakai WIB / GMT+7, apa pun zona waktu sistem.
+    os.environ["TZ"] = "Asia/Jakarta"
+    if hasattr(time, "tzset"):
+        time.tzset()
     ap = argparse.ArgumentParser(description="EmisiSense Vision - dasbor visi komputer lalu lintas & cuaca")
     ap.add_argument("--source", help=f"URL CCTV/berkas video/indeks kamera (bawaan: {DEFAULT_STREAM_URL})")
     ap.add_argument("--demo", action="store_true", help="mode simulasi (tanpa CCTV & internet)")

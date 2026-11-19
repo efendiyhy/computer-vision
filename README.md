@@ -188,3 +188,20 @@ Aplikasi Android membungkus dashboard web agar terasa seperti aplikasi asli: lay
 - **Pasang**: buka berkas APK di ponsel, izinkan pemasangan dari sumber ini. APK ini bertanda tangan debug (belum untuk Play Store).
 - **Pakai**: pastikan ponsel satu jaringan dengan Orange Pi, ketik IP (mis. `192.168.1.20`; port 5000 otomatis), tekan *Hubungkan*. Bila server memakai `--password`, kolom kata sandi akan muncul. Ganti server lewat *Sistem → Akses & kredit → Ganti server*.
 - **Build**: dikerjakan otomatis oleh `.github/workflows/android.yml`. Lokal: `cd android && gradle assembleDebug`.
+
+## Hotspot Orange Pi (tanpa router)
+
+Orange Pi dapat memancarkan Wi-Fi sendiri sehingga ponsel/laptop langsung tersambung tanpa router. Dari web (Sistem → Jaringan Orange Pi) Anda memilih: tetap memakai hotspot, atau menyambungkan Orange Pi ke Wi-Fi lain. Bila Wi-Fi pilihan gagal tersambung, hotspot otomatis menyala kembali.
+
+Pasang (di Orange Pi, butuh NetworkManager, bawaan Armbian/Orange Pi OS):
+
+```bash
+cd ~/emisisense-vision && git pull && sudo ./hotspot/install-hotspot.sh
+# opsional: sudo ./hotspot/install-hotspot.sh --ssid LabAQHI --password rahasia123
+```
+
+- Bawaan: SSID `EmisiSense-XXXX` (4 karakter MAC), sandi `emisisense123`, alamat `http://10.42.0.1:5000`, SSH `orangepi@10.42.0.1`.
+- Saat hotspot menyala Orange Pi tidak memakai Wi-Fi lain (satu adaptor), tetapi kabel LAN tetap bisa dipakai sebagai internet.
+- Tanpa internet, jam Orange Pi dikoreksi otomatis dari ponsel/browser yang terhubung. Semua waktu memakai WIB (GMT+7).
+- Aplikasi Android: tombol “Pakai hotspot Orange Pi” mengisi 10.42.0.1 dan mengikat aplikasi ke Wi-Fi agar tidak dialihkan ke data seluler.
+- CLI: `sudo emisisense-net status|scan|hotspot|boot`, `echo '{"ssid":"NAMA","password":"SANDI"}' | sudo emisisense-net connect`.

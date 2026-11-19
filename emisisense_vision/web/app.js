@@ -12,7 +12,10 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const colorOf = k => css("--c-" + k) || "#7a8691";
 const fmt = (n, d = 0) => (n == null || isNaN(n)) ? "–" : Number(n).toLocaleString("id-ID", { maximumFractionDigits: d, minimumFractionDigits: d });
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const hhmm = t => new Date(t * 1000).toTimeString().slice(0, 5);
+const TZ = "Asia/Jakarta"; // semua waktu ditampilkan WIB (GMT+7), apa pun zona waktu perangkat
+const WIBF = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const wibParts = t => Object.fromEntries(WIBF.formatToParts(new Date(t * 1000)).map(p => [p.type, p.value]));
+const hhmm = t => { const p = wibParts(t); return `${p.hour}:${p.minute}`; };
 async function api(u, body) {
   const r = await fetch(u, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   try { return await r.json(); } catch { return {}; }
@@ -470,7 +473,7 @@ async function loadHistory() {
   if (view !== "history") return;
   try {
     const r = await api(`/api/history?hours=${histH}`), d = r.data, day = r.bucket >= 6 * 3600, long = r.bucket >= 3600;
-    const lab = (x, short) => { const t = x.t ?? x, dt = new Date(t * 1000); const dm = `${dt.getDate()}/${dt.getMonth() + 1}`; return day ? dm : long ? (short ? `${dm} ${String(dt.getHours()).padStart(2, "0")}:00` : `${dm} ${hhmm(t)}`) : hhmm(t); };
+    const lab = (x, short) => { const t = x.t ?? x, p = wibParts(t); const dm = `${p.day}/${p.month}`; return day ? dm : long ? (short ? `${dm} ${p.hour}:00` : `${dm} ${hhmm(t)}`) : hhmm(t); };
     const every = Math.max(1, Math.round(d.length / 8));
     stackedBars($("#chHist"), d, { metric: "count", every, label: lab, aria: "Volume kendaraan", extra: x => (x.speed != null ? `<br>kecepatan rata-rata ${fmt(x.speed, 0)} km/j` : "") + (x.temp != null ? `<br>suhu ${fmt(x.temp, 1)}°C` : "") + (x.pm2_5 != null ? `<br>PM2,5 ${fmt(x.pm2_5, 1)} µg/m³` : "") });
     const tot = d.reduce((a, x) => a + KEYS.reduce((b, k) => b + (x[k] || 0), 0), 0), bucket = r.bucket >= 3600 ? r.bucket / 3600 + " jam" : r.bucket / 60 + " menit";
@@ -636,7 +639,7 @@ async function loadRecs() {
   if (view !== "history") return;
   let d; try { d = await api("/api/recordings"); } catch (e) { return; }
   const rows = d.items;
-  $("#tblRec tbody").innerHTML = rows.map(x => `<tr><td>${esc(x.name)}${x.active ? ' <span class="tag">merekam</span>' : ""}</td><td>${new Date(x.mtime * 1000).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}</td><td class="num">${bytesTxt(x.bytes)}</td><td class="num">${x.active ? "" : `<button class="btn sm" data-rec="play" data-n="${esc(x.name)}">Putar</button><a class="btn sm" href="/api/recordings/${encodeURIComponent(x.name)}?dl=1">Unduh</a><button class="btn sm danger" data-rec="del" data-n="${esc(x.name)}">Hapus</button>`}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Belum ada rekaman. Tekan “Rekam” di halaman Pemantauan.</td></tr>';
+  $("#tblRec tbody").innerHTML = rows.map(x => `<tr><td>${esc(x.name)}${x.active ? ' <span class="tag">merekam</span>' : ""}</td><td>${new Date(x.mtime * 1000).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short", timeZone: TZ })}</td><td class="num">${bytesTxt(x.bytes)}</td><td class="num">${x.active ? "" : `<button class="btn sm" data-rec="play" data-n="${esc(x.name)}">Putar</button><a class="btn sm" href="/api/recordings/${encodeURIComponent(x.name)}?dl=1">Unduh</a><button class="btn sm danger" data-rec="del" data-n="${esc(x.name)}">Hapus</button>`}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Belum ada rekaman. Tekan “Rekam” di halaman Pemantauan.</td></tr>';
   const st = d.status; $("#recNote").textContent = `Disimpan di folder data (recordings). Sisa ruang disk ${st.free_mb == null ? "–" : fmt(st.free_mb / 1024, 1) + " GB"}. Rekaman dipotong tiap 10 menit dan berhenti otomatis bila disk hampir penuh. Setiap rekaman memuat watermark dan cap waktu.`;
 }
 $("#tblRec").addEventListener("click", e => {
@@ -664,7 +667,67 @@ function render() {
   if (view === "live") { renderCamMeta(p); renderNotice(p); renderReadout(p.stats); renderWeather(p.weather); renderCharts(p.stats); renderZoneLines(p.stats); renderTables(p.stats); drawOverlay(); }
   renderSourceStatus(p); renderSystem(p);
 }
-setInterval(() => $("#clock").textContent = new Date().toLocaleTimeString("id-ID"), 1000);
+setInterval(() => $("#clock").textContent = new Date().toLocaleTimeString("id-ID", { timeZone: TZ }) + " WIB", 1000);
+
+// Orange Pi tanpa internet (mode hotspot) tidak punya jam yang benar: kirim waktu perangkat ini (server hanya menerapkannya bila perlu).
+const syncClock = () => fetch("/api/time", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t: Date.now() / 1000 }) }).catch(() => {});
+syncClock(); setInterval(syncClock, 600000);
+
+// ---- Jaringan Orange Pi: hotspot atau Wi-Fi pilihan
+let netPoll = null;
+async function netLoad() {
+  let r = null;
+  try { r = await (await fetch("/api/net", { cache: "no-store" })).json(); } catch (e) { return null; }
+  const panel = $("#netPanel");
+  if (!r || !r.available) { panel.hidden = true; return null; }
+  panel.hidden = false;
+  const port = location.port ? ":" + location.port : "";
+  const modeTxt = { hotspot: "Hotspot Orange Pi", wifi: "Tersambung ke Wi-Fi", disconnected: "Belum tersambung", "no-wifi": "Adaptor Wi-Fi tidak ditemukan" }[r.state] || r.state;
+  const rows = [["Mode", modeTxt], ["Nama jaringan", r.ssid || "–"], ["Alamat IP", r.ip || "–"], ["Alamat web", r.ip ? `http://${r.ip}${port}` : "–"]];
+  if (r.state !== "hotspot") rows.push(["Hotspot cadangan", `${r.hotspot.ssid} (sandi ${r.hotspot.password}), http://${r.hotspot.ip}${port}`]);
+  else rows.push(["Sandi hotspot", r.hotspot.password]);
+  const l = r.last;
+  if (l && l.state === "error") rows.push(["Percobaan terakhir", l.message || "Gagal"]);
+  if (l && l.state === "connecting") rows.push(["Sedang berpindah", l.target === "hotspot" ? "ke hotspot…" : `ke ${l.ssid}…`]);
+  $("#netState").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="selectable">${esc(v)}</dd>`).join("");
+  return r;
+}
+function netWatch() { // setelah pindah jaringan koneksi putus sebentar; pantau sampai server kembali
+  clearInterval(netPoll); let n = 0;
+  netPoll = setInterval(async () => { if (++n > 40) clearInterval(netPoll); const r = await netLoad(); if (r && r.last && r.last.state !== "connecting") { clearInterval(netPoll); } }, 3000);
+}
+function netSwitchedNotice(txt) {
+  openModal({ title: "Orange Pi sedang berpindah jaringan", body: `<p>${txt}</p><p class="muted small">Sambungan ke halaman ini akan terputus beberapa detik. Bila Wi-Fi tidak berhasil tersambung (sandi salah/di luar jangkauan), hotspot Orange Pi menyala kembali otomatis dalam sekitar satu menit.</p>`, });
+}
+function netConnectDialog(ssid, secure) {
+  openModal({ title: `Sambungkan ke “${ssid}”`, okText: "Sambungkan",
+    body: `<div class="fld"><label>Nama Wi-Fi</label><input type="text" id="nSsid" value="${esc(ssid)}" ${ssid ? "readonly" : 'placeholder="Nama Wi-Fi (SSID)"'}></div>${secure ? '<div class="fld"><label>Kata sandi Wi-Fi</label><input type="password" id="nPass" autocomplete="off" placeholder="8–63 karakter (kosongkan bila Wi-Fi terbuka)"></div>' : ""}<p class="muted small">Setelah tersambung, alamat Orange Pi berubah mengikuti Wi-Fi tersebut. Sambungkan ponsel ke Wi-Fi yang sama lalu masukkan IP barunya di aplikasi.</p>`,
+    onOk: async (host, err) => {
+      const name = host.querySelector("#nSsid").value.trim(), pw = host.querySelector("#nPass")?.value || "";
+      if (!name) { err("Isi nama Wi-Fi."); return false; }
+      if (pw && (pw.length < 8 || pw.length > 63)) { err("Kata sandi 8–63 karakter."); return false; }
+      const r = await fetch("/api/net/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ssid: name, password: pw }) }).then(x => x.json()).catch(() => ({ ok: false, message: "Gagal menghubungi server" }));
+      if (!r.ok) { err(r.message || "Gagal"); return false; }
+      setTimeout(() => { netSwitchedNotice(`Orange Pi menyambung ke <b>${esc(name)}</b>.`); netWatch(); }, 50);
+    } });
+}
+$("#netScan").onclick = async () => {
+  const box = $("#netList"); box.innerHTML = '<div class="empty">Mencari Wi-Fi…</div>';
+  const r = await fetch("/api/net/scan").then(x => x.json()).catch(() => ({ networks: [] }));
+  const nets = r.networks || [];
+  box.innerHTML = nets.length ? nets.map(n => `<button class="net-row" type="button" data-ssid="${esc(n.ssid)}" data-sec="${n.secure ? 1 : 0}"><span class="net-name">${esc(n.ssid)}${n.inuse ? ' <span class="tag">dipakai</span>' : ""}</span><span class="net-meta">${n.secure ? "🔒 " : ""}<span class="net-sig">${n.signal}%</span></span></button>`).join("")
+    : '<div class="empty">Tidak ada Wi-Fi terdeteksi. Saat hotspot menyala, sebagian adaptor tidak bisa memindai; pakai “Wi-Fi lain (ketik nama)”.</div>';
+};
+$("#netList").addEventListener("click", e => { const b = e.target.closest(".net-row"); if (b) { NA()?.tick?.(); netConnectDialog(b.dataset.ssid, b.dataset.sec === "1"); } });
+$("#netManual").onclick = () => netConnectDialog("", true);
+$("#netHotspot").onclick = () => openModal({ title: "Gunakan hotspot Orange Pi", okText: "Nyalakan hotspot",
+  body: "<p>Orange Pi memancarkan hotspot sendiri dan memutus Wi-Fi yang sedang dipakai. Sambungkan ponsel ke hotspot, lalu buka <b>10.42.0.1</b>.</p><p class=\"muted small\">Dalam mode hotspot Orange Pi tidak punya internet kecuali lewat kabel LAN, sehingga CCTV daring tidak terbaca; gunakan kamera USB/berkas video.</p>",
+  onOk: async (host, err) => {
+    const r = await fetch("/api/net/hotspot", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(x => x.json()).catch(() => ({ ok: false, message: "Gagal menghubungi server" }));
+    if (!r.ok) { err(r.message || "Gagal"); return false; }
+    setTimeout(() => { netSwitchedNotice("Orange Pi menyalakan hotspot. Sambungkan ponsel ke hotspot Orange Pi lalu buka <b>http://10.42.0.1:5000</b>."); netWatch(); }, 50);
+  } });
+netLoad(); setInterval(() => { if (!document.hidden && !$("#v-system").hidden) netLoad(); }, 15000);
 
 (async () => {
   await loadCfg(); buildLegend(); $("#srcLink").href = CFG.default_source || DEFAULT_SRC;

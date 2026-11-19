@@ -4,6 +4,8 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -27,7 +29,35 @@ from .weather import WeatherService, _get_json
 
 WEB = Path(__file__).resolve().parent / "web"
 VIDEO_EXT = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".m4v"}
+NET_HELPER = os.environ.get("EMISISENSE_NET_HELPER", "/usr/local/bin/emisisense-net")
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+
+
+def _net_prefix():
+    return [] if os.geteuid() == 0 else ["sudo", "-n"]
+
+
+def _net_ready():
+    return os.name == "posix" and os.path.exists(NET_HELPER) and (os.geteuid() == 0 or bool(shutil.which("sudo")))
+
+
+def _net_run(cmd, stdin=None, timeout=25):
+    """Panggil pengatur jaringan Orange Pi (hotspot/Wi-Fi) lewat sudo; None bila tidak terpasang."""
+    if not _net_ready():
+        return None
+    try:
+        p = subprocess.run([*_net_prefix(), NET_HELPER, *cmd], input=stdin, capture_output=True, text=True, timeout=timeout)
+        return json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else {"ok": False, "message": p.stderr.strip()[:200]}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "message": str(e)[:200]}
+
+
+def _net_detached(cmd, payload):
+    """Jalankan perubahan jaringan terpisah dari server (koneksi klien akan terputus sesaat)."""
+    p = subprocess.Popen([*_net_prefix(), NET_HELPER, *cmd], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, text=True)
+    p.stdin.write(json.dumps(payload))
+    p.stdin.close()
 
 
 def _date_range():
@@ -273,6 +303,53 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
             res["restarting"] = True
             updater.restart_soon(app.shutdown)
         return jsonify(res)
+
+    # ---------------------------------------------------------------- jaringan (hotspot / Wi-Fi Orange Pi)
+    @app.get("/api/net")
+    def net_status():
+        res = _net_run(["status"], timeout=15)
+        if res is None or res.get("available") is False:
+            return jsonify({"available": False})
+        return jsonify(res)
+
+    @app.get("/api/net/scan")
+    def net_scan():
+        res = _net_run(["scan"], timeout=30)
+        return jsonify(res or {"ok": False, "networks": [], "message": "Pengatur jaringan belum terpasang"})
+
+    @app.post("/api/net/connect")
+    def net_connect():
+        b = request.get_json(silent=True) or {}
+        ssid, pw = str(b.get("ssid", "")), str(b.get("password", ""))
+        if not ssid or len(ssid.encode()) > 32 or (pw and not 8 <= len(pw) <= 63):
+            return jsonify({"ok": False, "message": "Nama Wi-Fi atau kata sandi tidak valid (sandi 8-63 karakter)"}), 400
+        if _net_run(["status"], timeout=15) is None:
+            return jsonify({"ok": False, "message": "Pengatur jaringan belum terpasang"}), 503
+        _net_detached(["connect"], {"ssid": ssid, "password": pw})
+        return jsonify({"ok": True, "started": True})
+
+    @app.post("/api/net/hotspot")
+    def net_hotspot():
+        b = request.get_json(silent=True) or {}
+        payload = {k: str(b[k]) for k in ("ssid", "password") if b.get(k)}
+        if payload.get("password") and not 8 <= len(payload["password"]) <= 63:
+            return jsonify({"ok": False, "message": "Kata sandi hotspot harus 8-63 karakter"}), 400
+        if _net_run(["status"], timeout=15) is None:
+            return jsonify({"ok": False, "message": "Pengatur jaringan belum terpasang"}), 503
+        _net_detached(["hotspot"], payload)
+        return jsonify({"ok": True, "started": True})
+
+    @app.post("/api/time")
+    def sync_time():
+        """Orange Pi tanpa internet tidak punya jam yang benar; ponsel/browser mengirim waktu yang benar."""
+        try:
+            t = int(float((request.get_json(silent=True) or {}).get("t")))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False}), 400
+        if abs(t - time.time()) < 60:
+            return jsonify({"ok": True, "changed": False})
+        res = _net_run(["settime", str(t)], timeout=10)
+        return jsonify(res or {"ok": False, "changed": False})
 
     # ---------------------------------------------------------------- data tersimpan
     @app.get("/api/storage")

@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         store = Store(this)
         if (store.url.isEmpty()) { changeServerNow(); return }
+        NetBind.apply(this, store.url)
         setContentView(R.layout.activity_main)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         root = findViewById(R.id.root)

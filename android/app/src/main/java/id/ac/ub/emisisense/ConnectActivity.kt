@@ -43,6 +43,11 @@ class ConnectActivity : AppCompatActivity() {
         address.setOnEditorActionListener(go)
         password.setOnEditorActionListener(go)
         button.setOnClickListener { connect() }
+        findViewById<TextView>(R.id.useHotspot).setOnClickListener {
+            address.setText("10.42.0.1")
+            showError(null)
+            connect()
+        }
     }
 
     private fun showError(msg: String?) {
@@ -60,7 +65,12 @@ class ConnectActivity : AppCompatActivity() {
         button.text = getString(R.string.connecting)
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(address.windowToken, 0)
         val pw = password.text.toString()
+        NetBind.apply(this, base)
         thread {
+            if (NetBind.isPrivate(base)) { // beri waktu pengikatan ke Wi-Fi selesai
+                var w = 0
+                while (NetBind.wifi == null && w < 15) { Thread.sleep(100); w++ }
+            }
             val result = probe(base, pw)
             runOnUiThread {
                 busy = false
@@ -79,7 +89,7 @@ class ConnectActivity : AppCompatActivity() {
                         showError(getString(if (pw.isEmpty()) R.string.err_password else R.string.err_wrong_password))
                     }
                     Result.NOT_SERVER -> showError(getString(R.string.err_notserver))
-                    Result.UNREACHABLE -> showError(getString(R.string.err_unreachable))
+                    Result.UNREACHABLE -> showError(getString(R.string.err_unreachable) + "\n\n" + getString(R.string.hotspot_hint))
                 }
             }
         }
@@ -89,7 +99,9 @@ class ConnectActivity : AppCompatActivity() {
 
     private fun probe(base: String, pw: String): Result {
         return try {
-            val c = URL("$base/api/state").openConnection() as HttpURLConnection
+            val u = URL("$base/api/state")
+            val net = NetBind.wifi
+            val c = (if (net != null) net.openConnection(u) else u.openConnection()) as HttpURLConnection
             c.connectTimeout = 5000
             c.readTimeout = 6000
             if (pw.isNotEmpty()) {
