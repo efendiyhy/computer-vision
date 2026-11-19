@@ -79,7 +79,7 @@ class Analytics:
         cal = cfg["calibration"].get("m_per_px")
         pcu_w = cfg["pcu"]
         limit = cfg["speed_limit_kmh"]
-        self._count_outside = bool(cfg.get("count_outside", True))
+        self._count_outside = bool(cfg.get("count_outside", True)) and bool(lines)   # tanpa garis = tanpa perhitungan
         rows, zone, zone_pcu = [], Counter(), 0.0
         with self.lock:
             for tr in tracks:

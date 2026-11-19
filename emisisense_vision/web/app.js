@@ -103,16 +103,20 @@ function windRose(el, w) {
     svg.addEventListener("pointerleave", tipHide); }
   el._w = w;
 }
+function windTable(w) {
+  const top = [...(w.sectors || [])].sort((a, b) => b.pct - a.pct).filter(s => s.pct > 0).slice(0, 8);
+  return w.n ? `<p>${windNote(w)}</p><table><thead><tr><th>Dari arah</th><th class="num">Persen waktu</th><th class="num">Kecepatan (perkiraan)</th></tr></thead><tbody>${top.map(s => `<tr><td>${esc(s.name)} (${s.abbr})</td><td class="num">${fmt(s.pct, 1)}%</td><td class="num">${fmt(((s.bins.reduce((a, b, k) => a + b * [3, 7.5, 15, 25, 35][k], 0)) / (s.pct || 1)), 1)} km/j</td></tr>`).join("")}</tbody></table>` : "";
+}
 function windNote(w) { return !w || !w.n ? "" : `${w.prevailing ? `Angin paling sering datang dari <b>${esc(w.prevailing.name)}</b> (${fmt(w.prevailing.pct, 0)}% waktu). ` : ""}Kecepatan rata-rata ${fmt(w.mean_speed, 1)} km/jam, tertinggi ${fmt(w.max_speed, 0)}; tenang ${fmt(w.calm_pct, 0)}%. ${w.n} jam pengamatan.`; }
 let windH = 24;
 async function loadWind() {
   try {
-    if (view === "live") { const w = await api(`/api/windrose?hours=${windH}`); windRose($("#windRose"), w); $("#windNote").innerHTML = windNote(w); }
+    if (view === "live") { const w = await api(`/api/windrose?hours=${windH}`); windRose($("#windRose"), w); $("#windNote").innerHTML = windTable(w); }
     if (view === "history") {
       const w = await api(`/api/windrose?hours=${histH}`); windRose($("#histRose"), w);
       $("#histWindRange").textContent = `${histH >= 48 ? Math.round(histH / 24) + " hari" : histH + " jam"} terakhir · ${w.n || 0} jam data`;
       const top = [...(w.sectors || [])].sort((a, b) => b.pct - a.pct).filter(s => s.pct > 0).slice(0, 8);
-      $("#histWindTbl").innerHTML = w.n ? `<p>${windNote(w)}</p><table><thead><tr><th>Dari arah</th><th class="num">Persen waktu</th><th class="num">Kecepatan (perkiraan)</th></tr></thead><tbody>${top.map(s => `<tr><td>${esc(s.name)} (${s.abbr})</td><td class="num">${fmt(s.pct, 1)}%</td><td class="num">${fmt(((s.bins.reduce((a, b, k) => a + b * [3, 7.5, 15, 25, 35][k], 0)) / (s.pct || 1)), 1)} km/j</td></tr>`).join("")}</tbody></table>` : "";
+      $("#histWindTbl").innerHTML = windTable(w);
     }
   } catch (e) { /* ulangi pada siklus berikutnya */ }
 }
@@ -329,11 +333,55 @@ function nearest(p) {
 }
 ov.addEventListener("pointerdown", e => {
   const p = pos(e);
-  if (mode === "cal") { if (calPts.length >= 2) calPts = []; calPts.push(p); drawOverlay(); renderEditor(); return; }
+  if (mode === "cal") { if (calPts.length >= 2) calPts = []; calPts.push(p); drawOverlay(); renderEditor(); if (calPts.length === 2) calModal(); return; }
   const h = nearest(p); if (h) { drag = h; if (mode === "lines" && selLine !== h.i) { selLine = h.i; renderEditor(); } ov.setPointerCapture(e.pointerId); }
 });
 ov.addEventListener("pointermove", e => { if (!drag) return; const p = pos(e); if (mode === "lines") CFG.lines[drag.i][drag.k] = p; else CFG.roi[drag.i] = p; drawOverlay(); });
 ov.addEventListener("pointerup", () => { if (!drag) return; drag = null; save(mode === "lines" ? { lines: CFG.lines } : { roi: CFG.roi }); });
+
+/* ============================== popup ==============================
+   Popup hanya bisa ditutup dengan tombol X: klik di luar kotak atau tombol Esc tidak menutupnya, supaya isian tidak hilang. */
+function openModal({ title, body, el, okText = "Simpan", danger = false, onOk, onClose }) {
+  const back = document.createElement("div"); back.className = "modal-back";
+  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2><button class="modal-x" type="button" aria-label="Tutup (X)" title="Tutup">✕</button></div><div class="modal-body"></div>${onOk ? `<div class="modal-foot"><span class="modal-err" role="alert"></span><button class="btn ${danger ? "danger" : "primary"}" type="button">${esc(okText)}</button></div>` : ""}</div>`;
+  const host = back.querySelector(".modal-body"); let ph = null;
+  if (el) { ph = document.createComment("popup"); el.before(ph); el.hidden = false; host.append(el); } else host.innerHTML = body;
+  const close = () => { if (el) { el.hidden = true; ph.replaceWith(el); } back.remove(); onClose && onClose(); };
+  back.querySelector(".modal-x").onclick = close;
+  const okBtn = back.querySelector(".modal-foot .btn");
+  back.addEventListener("keydown", e => { if (e.key === "Escape") e.preventDefault(); if (e.key === "Enter" && okBtn && e.target.tagName === "INPUT" && e.target.type !== "file") { e.preventDefault(); okBtn.click(); } });
+  const err = t => back.querySelector(".modal-err").textContent = t || "";
+  if (okBtn) okBtn.onclick = async () => { err(""); const r = await onOk(host, err); if (r !== false) close(); };
+  document.body.append(back);
+  (host.querySelector("input,select,button") || back.querySelector(".modal-x")).focus();
+  return { close, root: host };
+}
+
+function lineModal(l) {
+  const isNew = !l, used = CFG.lines.map(x => x.id);
+  let k = 0; while (used.includes(String.fromCharCode(65 + k))) k++;
+  const id = String.fromCharCode(65 + k);
+  openModal({ title: isNew ? "Tambah garis" : "Ubah nama & arah", okText: isNew ? "Tambah garis" : "Simpan",
+    body: `<label class="fld">Nama garis<input type="text" id="mName" value="${esc(isNew ? "Garis " + id : l.name)}" maxlength="40" placeholder="mis. Garis A"></label>
+    <label class="fld">Nama arah yang dihitung<input type="text" id="mDir" value="${esc(isNew ? "" : l.dir)}" maxlength="40" placeholder="mis. Mendekat, Ke selatan"><small>Kendaraan yang lewat searah panah dicatat dengan nama ini. Arah panah bisa dibalik setelah garis dibuat.</small></label>`,
+    onOk: async (root, err) => {
+      const name = root.querySelector("#mName").value.trim(), dir = root.querySelector("#mDir").value.trim();
+      if (!name) { err("Isi nama garis."); return false; } if (!dir) { err("Isi nama arah."); return false; }
+      if (isNew) {
+        const usedC = CFG.lines.map(x => x.color), color = LINE_COLORS.find(x => !usedC.includes(x)) || LINE_COLORS[CFG.lines.length % LINE_COLORS.length], y = Math.min(.9, .45 + .08 * CFG.lines.length);
+        CFG.lines.push({ id, name, p1: [.1, y], p2: [.9, y], dir, color }); selLine = CFG.lines.length - 1;
+      } else { l.name = name; l.dir = dir; }
+      await save({ lines: CFG.lines }); refreshLegend(); renderEditor(); drawOverlay(); toast(isNew ? "Garis ditambahkan" : "Disimpan"); } });
+}
+function calModal() {
+  openModal({ title: "Panjang nyata", okText: "Terapkan kalibrasi",
+    body: `<label class="fld">Panjang nyata antara kedua titik (meter)<input type="number" id="mMeter" min="0.1" step="0.1" placeholder="mis. 4"><small>Ukur dengan meteran pada jalan: marka putus-putus, lebar lajur, atau panjang zebra cross.</small></label>`,
+    onOk: async (root, err) => {
+      const m = parseFloat(root.querySelector("#mMeter").value); if (!(m > 0)) { err("Isi panjang dalam meter."); return false; }
+      const fr = S?.status.frame || [800, 450], px = Math.hypot((calPts[0][0] - calPts[1][0]) * fr[0], (calPts[0][1] - calPts[1][1]) * fr[1]);
+      const r = await api("/api/calibrate", { ref_px: px, ref_m: m }); if (r.error) { err(r.error); return false; }
+      await loadCfg(); toast("Kalibrasi diterapkan"); setMode(null); } });
+}
 
 function setMode(m) {
   mode = mode === m ? null : m; calPts = [];
@@ -344,20 +392,19 @@ function setMode(m) {
 function renderEditor() {
   if (!mode) { editor.hidden = true; return; } editor.hidden = false;
   if (mode === "lines") {
-    selLine = Math.min(selLine, CFG.lines.length - 1); const l = CFG.lines[selLine];
-    editor.innerHTML = `<p><b>Atur garis hitung.</b> Satu garis menghitung <b>satu arah saja</b>: kendaraan yang lewat searah panah. Seret titik di ujung garis untuk memindahkan; tekan titik untuk memilih garis. Panah menunjuk arah yang dihitung. Jalan dua arah: buat dua garis, satu untuk tiap arah, dengan panah berlawanan.</p>
-    <div class="tools"><span class="swatch" style="background:${l.color}" title="Warna garis ini"></span><select id="eSel" aria-label="Garis dipilih">${CFG.lines.map((x, i) => `<option value="${i}" ${i === selLine ? "selected" : ""}>${esc(x.name)} → ${esc(x.dir)}</option>`).join("")}</select>
-    <input id="eName" value="${esc(l.name)}" aria-label="Nama garis" placeholder="Nama garis"><input id="eDir" value="${esc(l.dir)}" aria-label="Nama arah yang dihitung" placeholder="Nama arah (mis. Ke selatan)">
-    <button class="btn sm" id="eFlip">Balik arah panah</button><button class="btn sm" id="eAdd">Tambah garis</button><button class="btn sm danger" id="eDel" ${CFG.lines.length < 2 ? "disabled" : ""}>Hapus garis ini</button><button class="btn sm primary" id="eDone">Selesai</button></div>`;
-    $("#eSel").onchange = e => { selLine = +e.target.value; renderEditor(); drawOverlay(); };
-    const upd = () => { l.name = $("#eName").value.trim() || l.name; l.dir = $("#eDir").value.trim() || l.dir; save({ lines: CFG.lines }); refreshLegend(); drawOverlay(); renderEditor(); };
-    ["#eName", "#eDir"].forEach(q => $(q).onchange = upd);
-    $("#eFlip").onclick = () => { [l.p1, l.p2] = [l.p2, l.p1]; save({ lines: CFG.lines }); drawOverlay(); toast("Arah panah dibalik"); };
-    $("#eAdd").onclick = () => {
-      const used = CFG.lines.map(x => x.color), color = LINE_COLORS.find(x => !used.includes(x)) || LINE_COLORS[CFG.lines.length % LINE_COLORS.length];
-      let k = 0; const ids = CFG.lines.map(x => x.id); while (ids.includes(String.fromCharCode(65 + k))) k++; const id = String.fromCharCode(65 + k), y = Math.min(.9, .45 + .08 * CFG.lines.length);
-      CFG.lines.push({ id, name: "Garis " + id, p1: [.1, y], p2: [.9, y], dir: "Arah " + id, color }); selLine = CFG.lines.length - 1; save({ lines: CFG.lines }); refreshLegend(); renderEditor(); drawOverlay(); };
-    $("#eDel").onclick = () => { CFG.lines.splice(selLine, 1); selLine = 0; save({ lines: CFG.lines }); refreshLegend(); renderEditor(); drawOverlay(); };
+    const n = CFG.lines.length; selLine = Math.max(0, Math.min(selLine, n - 1)); const l = CFG.lines[selLine];
+    editor.innerHTML = `<p><b>Atur garis hitung.</b> Satu garis menghitung <b>satu arah saja</b>: kendaraan yang lewat searah panah. Seret titik di ujung garis untuk memindahkan; tekan titik untuk memilih garis. Jalan dua arah: buat dua garis dengan panah berlawanan. ${n ? "" : "<b>Belum ada garis, jadi tidak ada kendaraan yang dihitung.</b>"}</p>
+    <div class="tools">${n ? `<span class="swatch" style="background:${l.color}" title="Warna garis ini"></span><select id="eSel" aria-label="Garis dipilih">${CFG.lines.map((x, i) => `<option value="${i}" ${i === selLine ? "selected" : ""}>${esc(x.name)} → ${esc(x.dir)}</option>`).join("")}</select>
+    <button class="btn sm" id="eEdit">Ubah nama &amp; arah</button><button class="btn sm" id="eFlip">Balik arah panah</button>` : ""}<button class="btn sm primary" id="eAdd">Tambah garis</button>${n ? `<button class="btn sm danger" id="eDel">Hapus garis ini</button>` : ""}<button class="btn sm" id="eDone">Selesai</button></div>`;
+    if (n) {
+      $("#eSel").onchange = e => { selLine = +e.target.value; renderEditor(); drawOverlay(); };
+      $("#eFlip").onclick = () => { [l.p1, l.p2] = [l.p2, l.p1]; save({ lines: CFG.lines }); drawOverlay(); toast("Arah panah dibalik"); };
+      $("#eEdit").onclick = () => lineModal(l);
+      $("#eDel").onclick = () => openModal({ title: "Hapus garis", okText: "Hapus garis", danger: true,
+        body: `<p>Hapus <b>${esc(l.name)}</b> (→ ${esc(l.dir)})? Hitungan baru pada garis ini berhenti. Data yang sudah tersimpan tidak dihapus.${n === 1 ? " Ini garis terakhir: setelah dihapus <b>tidak ada kendaraan yang dihitung</b> sampai Anda menambah garis lagi." : ""}</p>`,
+        onOk: async () => { CFG.lines.splice(selLine, 1); selLine = 0; await save({ lines: CFG.lines }); refreshLegend(); renderEditor(); drawOverlay(); toast("Garis dihapus"); } });
+    }
+    $("#eAdd").onclick = () => lineModal(null);
     $("#eDone").onclick = () => setMode(null);
   }
   if (mode === "roi") {
@@ -367,13 +414,11 @@ function renderEditor() {
   }
   if (mode === "cal") {
     const ready = calPts.length === 2, cal = CFG.calibration?.m_per_px;
-    editor.innerHTML = `<p><b>Kalibrasi kecepatan.</b> ${ready ? "Masukkan panjang nyata antara kedua titik, lalu terapkan." : `Klik dua titik pada sesuatu yang panjang aslinya diketahui di jalan (marka putus-putus, lebar lajur, panjang zebra cross). Titik ke-${calPts.length + 1}…`}</p>
-    <div class="tools">${ready ? `<input id="eM" type="number" min="0.1" step="0.1" placeholder="meter" aria-label="Panjang nyata dalam meter"><button class="btn sm primary" id="eOk">Terapkan</button>` : ""}<button class="btn sm" id="eClr">Hapus kalibrasi</button><button class="btn sm" id="eDone">Tutup</button>${cal ? `<span class="muted small">aktif: ${fmt(cal * 100, 2)} cm per piksel</span>` : ""}</div>`;
+    editor.innerHTML = `<p><b>Kalibrasi kecepatan.</b> ${ready ? "Kedua titik sudah dipasang. Isi panjang nyata di antara keduanya." : `Klik dua titik pada sesuatu yang panjang aslinya diketahui di jalan (marka putus-putus, lebar lajur, panjang zebra cross). Titik ke-${calPts.length + 1}…`}</p>
+    <div class="tools">${ready ? `<button class="btn sm primary" id="eOk">Isi panjang nyata</button>` : ""}<button class="btn sm" id="eClr">Hapus kalibrasi</button><button class="btn sm" id="eDone">Tutup</button>${cal ? `<span class="muted small">aktif: ${fmt(cal * 100, 2)} cm per piksel</span>` : ""}</div>`;
     $("#eDone").onclick = () => setMode(null);
     $("#eClr").onclick = async () => { await api("/api/calibrate/clear", {}); await loadCfg(); toast("Kalibrasi dihapus"); renderEditor(); };
-    if (ready) $("#eOk").onclick = async () => { const m = parseFloat($("#eM").value); if (!(m > 0)) return toast("Isi panjang dalam meter");
-      const fr = S?.status.frame || [800, 450], px = Math.hypot((calPts[0][0] - calPts[1][0]) * fr[0], (calPts[0][1] - calPts[1][1]) * fr[1]);
-      const r = await api("/api/calibrate", { ref_px: px, ref_m: m }); if (r.error) return toast(r.error); await loadCfg(); toast("Kalibrasi diterapkan"); setMode(null); };
+    if (ready) $("#eOk").onclick = calModal;
   }
 }
 async function save(patch) { const r = await api("/api/config", patch); if (!r.error) CFG = r; return r; }
@@ -382,9 +427,9 @@ async function loadCfg() { CFG = await api("/api/config"); }
 $("#tLines").onclick = () => setMode("lines"); $("#tRoi").onclick = () => setMode("roi"); $("#tCal").onclick = () => setMode("cal");
 $("#tFull").onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen?.(); };
 $("#tPause").onclick = async () => { const r = await api("/api/pause", { paused: !(S?.status.paused) }); toast(r.paused ? "Pemrosesan dijeda" : "Pemrosesan dilanjutkan"); };
-$("#btnReset").onclick = async () => { if (confirm("Kosongkan hitungan di layar? Data yang sudah tersimpan tidak dihapus.")) { await api("/api/reset", {}); toast("Tampilan hitungan dikosongkan"); } };
+$("#btnReset").onclick = () => openModal({ title: "Kosongkan tampilan", okText: "Kosongkan", danger: true, body: "<p>Kosongkan hitungan di layar? Data yang sudah tersimpan tidak dihapus.</p>", onOk: async () => { await api("/api/reset", {}); toast("Tampilan hitungan dikosongkan"); } });
 $("#segMetric").onclick = e => { const b = e.target.closest("button"); if (!b) return; metric = b.dataset.m; $$("#segMetric button").forEach(x => x.classList.toggle("on", x === b)); if (S) renderCharts(S.stats); };
-addEventListener("keydown", e => { if (e.key === "Escape" && mode) setMode(mode); });
+addEventListener("keydown", e => { if (e.key === "Escape" && mode && !document.querySelector(".modal-back")) setMode(mode); });
 document.addEventListener("fullscreenchange", () => setTimeout(fitOverlay, 50));
 
 function refreshLegend() {
@@ -422,6 +467,7 @@ let srcDirty = false, locDirty = false;
 function initSourceView() {
   if (!CFG) return;
   if (!srcDirty) $("#srcInput").value = CFG.source;
+  $("#locSummary").innerHTML = `<dt>Nama</dt><dd>${esc(CFG.location.name)}</dd><dt>Koordinat</dt><dd>${fmt(CFG.location.lat, 4)}, ${fmt(CFG.location.lon, 4)}</dd>`;
   if (!locDirty) { $("#locName").value = CFG.location.name; $("#locLat").value = CFG.location.lat; $("#locLon").value = CFG.location.lon; }
 }
 $("#srcInput").oninput = () => srcDirty = true;
@@ -555,4 +601,6 @@ setInterval(() => $("#clock").textContent = new Date().toLocaleTimeString("id-ID
   es.onmessage = e => { try { S = JSON.parse(e.data); S._recv = performance.now(); render(); } catch (err) { console.error(err); } };
   es.onerror = () => { const el = $("#status"); el.dataset.s = "error"; $("#statusTxt").textContent = "Server terputus"; $("#statusSub").textContent = ""; };
 })();
+$("#srcOpen").onclick = () => openModal({ title: "Ubah sumber video", el: $("#srcForm") });
+$("#locOpen").onclick = () => openModal({ title: "Ubah lokasi cuaca", el: $("#locForm") });
 })();

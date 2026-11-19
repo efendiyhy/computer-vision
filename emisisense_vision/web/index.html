@@ -79,12 +79,12 @@
       <div class="readout-col">
         <div class="panel readout" id="readout"></div>
         <div class="panel weather" id="weather"><div class="panel-head"><h2>Cuaca &amp; udara</h2></div><div class="empty">Memuat data cuaca…</div></div>
-        <div class="panel" id="windPanel">
-          <div class="panel-head"><h2>Mawar angin</h2><div class="seg" id="segWind"><button data-h="24" class="on">24 jam</button><button data-h="168">7 hari</button><button data-h="720">30 hari</button></div></div>
-          <div class="windrose" id="windRose"><div class="empty">Memuat data angin…</div></div>
-          <p class="muted small" id="windNote"></p>
-        </div>
       </div>
+    </div>
+
+    <div class="panel" id="windPanel">
+      <div class="panel-head"><h2>Mawar angin</h2><div class="seg" id="segWind"><button data-h="24" class="on">24 jam</button><button data-h="168">7 hari</button><button data-h="720">30 hari</button></div></div>
+      <div class="wind-wide"><div class="windrose" id="windRose"><div class="empty">Memuat data angin…</div></div><div><div id="windNote"></div><p class="muted small">Batang menunjukkan <b>dari arah mana</b> angin datang dan seberapa sering; makin gelap makin kencang.</p></div></div>
     </div>
 
     <div class="row r-8-4">
@@ -136,7 +136,9 @@
   <section class="view" id="v-source" hidden>
     <div class="row r-6-6">
       <div class="panel">
-        <div class="panel-head"><h2>Sumber video</h2></div>
+        <div class="panel-head"><h2>Sumber video</h2><button class="btn sm primary" id="srcOpen">Ubah sumber</button></div>
+        <dl class="kv" id="srcActive"></dl>
+        <div id="srcForm" hidden>
         <label class="fld">Alamat sumber
           <input type="text" id="srcInput" spellcheck="false" placeholder="https://… (CCTV/HLS/MJPEG/JPEG), rtsp://…, path berkas di server, atau 0 untuk kamera USB"></label>
         <div class="tools gap">
@@ -146,11 +148,13 @@
         </div>
         <div class="tools gap mt"><button class="btn" id="srcTest">Tes koneksi</button><button class="btn primary" id="srcApply">Terapkan sumber</button></div>
         <div class="result" id="srcResult" aria-live="polite"></div>
-        <dl class="kv" id="srcActive"></dl>
         <p class="muted small">Alamat yang didukung: aliran langsung (.m3u8, MJPEG, JPEG, RTSP), berkas video, kamera USB, dan <b>tautan YouTube</b> (video maupun siaran langsung). Pengujian membaca video selama beberapa detik dan melaporkan jenis sumber, resolusi, dan frame rate sebenarnya. Hitungan sesi dimulai ulang saat sumber diganti; data lama tetap tersimpan.</p>
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>Lokasi cuaca (Open-Meteo)</h2></div>
+        <div class="panel-head"><h2>Lokasi cuaca (Open-Meteo)</h2><button class="btn sm primary" id="locOpen">Ubah lokasi</button></div>
+        <dl class="kv" id="locSummary"></dl>
+        <div id="locForm" hidden>
         <label class="fld">Cari tempat
           <span class="inline"><input type="text" id="geoQ" spellcheck="false" placeholder="mis. Dinoyo, Malang"><button class="btn" id="geoBtn">Cari</button></span></label>
         <ul class="geo" id="geoRes"></ul>
@@ -162,6 +166,7 @@
         <div class="tools gap mt"><button class="btn primary" id="locApply">Terapkan lokasi</button><button class="btn" id="locNow">Muat ulang cuaca</button></div>
         <div class="result" id="locResult" aria-live="polite"></div>
         <p class="muted small">Koordinat titik CCTV bisa diambil dari klik-kanan di Google Maps. Cuaca dan kualitas udara disimpan bersama data lalu lintas.</p>
+        </div>
       </div>
     </div>
   </section>

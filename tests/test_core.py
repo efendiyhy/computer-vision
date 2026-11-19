@@ -265,3 +265,11 @@ def test_windrose_storage(tmp_path):
     w = st.windrose(24, loc)
     assert w["n"] == 2 and w["prevailing"]["abbr"] == "T"
     assert st.windrose(24 * 7, loc)["n"] == 3
+
+
+def test_no_lines_means_no_counting(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.update({"lines": []}, save=False)
+    assert cfg["lines"] == []
+    frames = [(i / 6, [Detection(300, 80 + i * 10, 380, 130 + i * 10, .9, "car")]) for i in range(30)]
+    assert run(make_an(cfg), Tracker(), frames)["total"] == 0
