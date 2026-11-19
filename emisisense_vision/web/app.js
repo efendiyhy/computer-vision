@@ -562,6 +562,9 @@ function renderSystem(p) {
     row("Sambung ulang", fmt(st.reconnects)) + row("Waktu aktif", fmt(st.uptime_s / 60, 0) + " menit") + row("Detektor", esc(st.detector));
   $("#diagMsg").textContent = st.message || "";
   $("#storInfo").innerHTML = sto ? row("Berkas", esc(sto.path)) + row("Kejadian", fmt(sto.events)) + row("Menit tercatat", fmt(sto.minutes)) + row("Rekaman cuaca", fmt(sto.weather)) + row("Ukuran", fmt(sto.size_kb, 0) + " KB") + row("Data pertama", esc(sto.first ? sto.first.replace("T", " ").slice(0, 16) : "–")) + row("Data terakhir", esc(sto.last ? sto.last.replace("T", " ").slice(0, 16) : "–")) + row("Penulisan terakhir", esc(sto.last_write ? sto.last_write.slice(11, 19) : "–")) + row("Galat tulis", fmt(sto.errors), sto.errors ? "bad" : "ok") : "";
+  const host = ((p.urls || []).map(u => { try { return new URL(u).hostname; } catch (e) { return ""; } }).find(h => h && h !== "localhost" && h !== "127.0.0.1")) || "IP-ORANGEPI";
+  const dbp = sto?.path || "~/emisisense-vision/data/emisisense.db", dirp = dbp.includes("/") ? dbp.slice(0, dbp.lastIndexOf("/")) : ".";
+  $$("pre[data-tpl]").forEach(el => { const t = el.dataset.tpl.replaceAll("{IP}", host).replaceAll("{DB}", dbp).replaceAll("{DIR}", dirp); if (el.textContent !== t) el.textContent = t; });
   $("#netInfo").innerHTML = row("Alamat jaringan lokal", (p.urls || []).map(u => `<a href="${u}">${u}</a>`).join("<br>") || "–") + row("Versi aplikasi", esc(p.version));
 }
 let upd = null;

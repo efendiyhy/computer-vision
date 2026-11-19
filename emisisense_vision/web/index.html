@@ -202,7 +202,10 @@
         <div class="fld">Jenis yang dideteksi<div class="checks" id="optClasses"></div><small>Truk hanya terdeteksi oleh YOLO.</small></div>
         <label class="check"><input type="checkbox" id="optPeople"><span><b>Hitung pejalan kaki</b><small>Manusia yang berjalan dihitung dan dicatat terpisah dari kendaraan (tidak masuk jumlah kendaraan maupun SMP). Pengendara motor dan sepeda tidak dihitung sebagai pejalan kaki.</small></span></label>
         <label class="fld">Batas kecepatan (km/jam)<input type="number" id="optLim" min="10" max="120"></label>
-        <div class="fld">Bobot SMP per jenis<div class="grid6" id="optPcu"></div></div>
+        <div class="fld">Bobot SMP per jenis<div class="grid6" id="optPcu"></div>
+          <details class="howto"><summary>Apa itu SMP?</summary>
+            <p><b>SMP adalah Satuan Mobil Penumpang</b>, ukuran standar dalam teknik lalu lintas Indonesia (PKJI). Semua jenis kendaraan disetarakan dengan mobil: 1 mobil = 1 SMP, jadi kendaraan yang lebih kecil bobotnya di bawah 1 (motor 0,25 berarti 4 motor setara 1 mobil) dan yang lebih besar di atas 1 (bus dan truk 1,2).</p>
+            <p>Bobot dipakai untuk Volume SMP, kepadatan zona, dan grafik mode SMP. Mengubahnya hanya memengaruhi hitungan berikutnya, bukan jumlah kendaraan. Untuk laporan resmi, sesuaikan dengan tabel ekuivalensi PKJI yang berlaku untuk jenis jalan Anda.</p></details></div>
         <div class="fld">Kalibrasi kecepatan<dl class="kv" id="calInfo"></dl>
           <div class="tools gap"><a class="btn sm" href="#live" id="goCal">Kalibrasi di video</a><button class="btn sm" id="calClear">Hapus kalibrasi</button></div>
           <small>Tanpa kalibrasi, skala memakai ukuran khas tiap jenis (perkiraan kasar).</small></div>
@@ -222,10 +225,15 @@
         <div class="panel-head"><h2>Versi &amp; pembaruan</h2><button class="btn sm" id="updCheck">Periksa sekarang</button></div>
         <dl class="kv" id="verInfo"></dl>
         <div id="updBody" class="upd"></div>
-        <details class="howto"><summary>Cara memperbarui lewat terminal</summary>
-<pre>Linux / macOS:   ./update.sh
-Windows:         update.bat
-Atau pemasang:   jalankan ulang perintah install.sh / install.ps1</pre></details>
+        <details class="howto" open><summary>Cara memperbarui di Orange Pi</summary>
+<pre id="howUpdate" data-tpl="1. Masuk ke Orange Pi dari laptop:
+   ssh orangepi@{IP}
+
+2. Jalankan pembaruan:
+   cd ~/emisisense-vision
+   ./update.sh
+
+Tanpa terminal: tekan &quot;Perbarui dan mulai ulang&quot; di panel ini."></pre></details>
       </div>
       <div class="panel">
         <div class="panel-head"><h2>Diagnosa kinerja</h2><span class="muted small">diperbarui tiap detik</span></div>
@@ -235,7 +243,22 @@ Atau pemasang:   jalankan ulang perintah install.sh / install.ps1</pre></details
     </div>
     <div class="row r-6-6">
       <div class="panel"><div class="panel-head"><h2>Penyimpanan data</h2></div><dl class="kv" id="storInfo"></dl>
-        <p class="muted small">Kejadian ditulis langsung; agregat menit disimpan tiap beberapa detik dan saat aplikasi berhenti. Mulai ulang pada menit yang sama melanjutkan hitungan.</p></div>
+        <p class="muted small">Kejadian ditulis langsung; agregat menit disimpan tiap beberapa detik dan saat aplikasi berhenti. Mulai ulang pada menit yang sama melanjutkan hitungan.</p>
+        <details class="howto" open><summary>Cara mengakses data di Orange Pi</summary>
+<pre id="howData" data-tpl="1. Masuk ke Orange Pi dari laptop:
+   ssh orangepi@{IP}
+
+2. Lihat berkas data dan rekaman video:
+   ls -lh {DIR}
+
+3. Baca database langsung (pasang sekali: sudo apt install sqlite3):
+   sqlite3 {DB} &quot;select datetime(ts,'unixepoch','localtime'), cls, line, direction from events order by ts desc limit 10;&quot;
+
+4. Salin ke laptop (jalankan di laptop, bukan di Orange Pi):
+   scp orangepi@{IP}:{DB} .
+   scp -r orangepi@{IP}:{DIR}/recordings .
+
+Tanpa terminal: halaman Riwayat, bagian Unduh data dan Rekaman video."></pre></details></div>
       <div class="panel"><div class="panel-head"><h2>Akses &amp; kredit</h2></div><dl class="kv" id="netInfo"></dl>
         <p class="credit">Dikembangkan oleh <b>LAB AQHI</b> dan <b><a class="ek" href="https://ek-instrumentation.com" target="_blank" rel="noopener">EK Instrumentation</a></b>.<br><span class="muted small">Universitas Brawijaya · Penelitian EmisiSense (PDU 2026)</span></p></div>
     </div>
