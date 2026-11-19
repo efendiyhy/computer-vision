@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">EmisiSense</string>
+    <string name="subtitle">Pemantauan lalu lintas</string>
+    <string name="hint_address">Alamat IP, mis. 192.168.1.20</string>
+    <string name="hint_password">Kata sandi</string>
+    <string name="connect">Hubungkan</string>
+    <string name="connecting">Menghubungkan…</string>
+    <string name="help">Masukkan alamat IP Orange Pi. Port 5000 dipakai otomatis. Ponsel harus satu jaringan dengan perangkat.</string>
+    <string name="err_empty">Isi alamat IP terlebih dahulu.</string>
+    <string name="err_unreachable">Tidak dapat terhubung. Periksa alamat IP, port, dan pastikan ponsel satu jaringan dengan Orange Pi.</string>
+    <string name="err_password">Server meminta kata sandi. Isi kata sandi lalu coba lagi.</string>
+    <string name="err_wrong_password">Kata sandi salah.</string>
+    <string name="err_notserver">Alamat ini bukan server EmisiSense Vision.</string>
+    <string name="retry">Coba lagi</string>
+    <string name="change_server">Ganti server</string>
+    <string name="load_failed">Halaman tidak dapat dimuat</string>
+    <string name="auth_title">Kata sandi diperlukan</string>
+    <string name="ok">Masuk</string>
+    <string name="cancel">Batal</string>
+    <string name="downloading">Mengunduh berkas…</string>
+</resources>

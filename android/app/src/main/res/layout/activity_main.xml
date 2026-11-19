@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/bg">
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipe" android:layout_width="match_parent" android:layout_height="match_parent">
+        <WebView android:id="@+id/web" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="3dp" android:max="100" android:visibility="gone" />
+    <LinearLayout android:id="@+id/errorView" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:background="@color/bg" android:orientation="vertical" android:gravity="center"
+        android:padding="32dp" android:visibility="gone" android:clickable="true" android:focusable="true">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="@string/load_failed" android:textColor="@color/ink" android:textSize="20sp" android:textStyle="bold" />
+        <TextView android:id="@+id/errorMsg" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:gravity="center" android:textColor="@color/mute" android:textSize="14sp" />
+        <Button android:id="@+id/retry" android:layout_width="220dp" android:layout_height="52dp"
+            android:layout_marginTop="26dp" android:text="@string/retry" android:textAllCaps="false" />
+        <Button android:id="@+id/change" style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="220dp" android:layout_height="52dp" android:text="@string/change_server"
+            android:textAllCaps="false" />
+    </LinearLayout>
+</FrameLayout>
