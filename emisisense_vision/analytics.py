@@ -1,10 +1,11 @@
 """Analitik lalu lintas: hitung kendaraan unik, arah, kecepatan, kepadatan zona, agregat per menit, dan penyimpanan.
 
 Aturan hitung (satu kendaraan = satu hitungan):
-  1. Bila trek melintasi sebuah garis hitung -> dihitung saat melintas (cara "garis"), lengkap dengan arah garis itu.
-  2. Bila belum melintasi garis tetapi sudah terbukti bergerak (jarak tempuh >= ukuran kendaraan) atau trek
-     berakhir setelah bergerak -> dihitung (cara "lacak"), arah dari vektor gerak.
-Dengan begitu hitungan tetap masuk walaupun garis tidak tepat di jalur kendaraan.
+  1. SATU garis = SATU arah. Trek yang melintasi garis searah panahnya dihitung (cara "garis"). Melintas berlawanan
+     panah tidak dihitung oleh garis itu (jalan dua arah memakai dua garis, satu per arah).
+  2. Trek yang berakhir tanpa pernah menyentuh garis, tetapi terbukti bergerak (jarak tempuh >= ukuran kendaraan),
+     dihitung di "Di luar garis" (cara "lacak"), bila opsi count_outside aktif. Trek yang melintas
+     berlawanan panah dikecualikan dari cadangan ini.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from .tracker import Track
 SIZE_M = {"car": 3.0, "motorbike": 1.5, "bus": 6.0, "truck": 5.0, "bicycle": 1.4, "other": 3.0}   # ukuran khas (akar luas siluet)
 SPEED_BINS = [0, 10, 20, 30, 40, 50, 60, 70, 80]
 MINUTES_KEPT = 120
-FREE_LINE = {"id": "_free", "name": "Di luar garis", "dir1": "Mendekat", "dir2": "Menjauh"}
+FREE_LINE = {"id": "_free", "name": "Di luar garis", "dir": "Bergerak tanpa melewati garis", "free": True}
 
 
 def point_side(p, a, b) -> float:
@@ -78,6 +79,7 @@ class Analytics:
         cal = cfg["calibration"].get("m_per_px")
         pcu_w = cfg["pcu"]
         limit = cfg["speed_limit_kmh"]
+        self._count_outside = bool(cfg.get("count_outside", True))
         rows, zone, zone_pcu = [], Counter(), 0.0
         with self.lock:
             for tr in tracks:
@@ -95,14 +97,13 @@ class Analytics:
                 if fresh:
                     for ln in lines:
                         self._check_line(tr, ln, W, H, t, limit, pcu_w)
-                    self._check_motion(tr, t, limit, pcu_w)
                 rows.append({
                     "id": tr.id, "cls": tr.cls, "label": CLASS_LABEL.get(tr.cls, tr.cls),
                     "speed": None if tr.speed_kmh is None else round(tr.speed_kmh, 1),
                     "conf": round(float(tr.conf), 2), "in_roi": bool(inside), "coasting": not fresh,
                     "age": round(t - tr.t0, 1), "counted": tr.id in self.counted_ids,
                 })
-            for tr in dead:                         # trek yang berakhir: hitung bila terbukti bergerak
+            for tr in dead:                         # trek berakhir tanpa pernah menyentuh garis: cadangan "Di luar garis"
                 self._check_motion(tr, t, limit, pcu_w, final=True)
             self.cur_tracks = rows
             self.zone_counts, self.zone_pcu = zone, zone_pcu
@@ -131,21 +132,26 @@ class Analytics:
         sign = 1 if s > 0 else -1
         prev = tr.side.get(ln["id"])
         tr.side[ln["id"]] = sign
-        if prev is None or prev == sign:
+        if prev is None:
+            tr.side0[ln["id"]] = sign              # asal trek; kembali ke sisi asal (getaran kotak) tidak dihitung
+            return
+        if prev == sign:
             return
         ab = np.array(b) - np.array(a)
         u = float(np.dot(np.array(foot) - np.array(a), ab) / (np.dot(ab, ab) + 1e-9))
         if not -0.08 <= u <= 1.08:
             return
-        direction = 1 if prev < 0 and sign > 0 else 2
-        key = (ln["id"], direction)
-        if key in tr.counted:
-            return
-        tr.counted.add(key)
-        self._register(tr, ln, direction, "garis", limit, pcu_w)
+        origin = tr.side0.get(ln["id"], prev)
+        if origin < 0 and sign > 0:                  # dari sisi asal ke sisi panah: searah panah -> dihitung
+            key = (ln["id"], 1)
+            if key not in tr.counted:
+                tr.counted.add(key)
+                self._register(tr, ln, 1, "garis", limit, pcu_w)
+        elif origin > 0 and sign < 0:                # melintas berlawanan panah: bukan hitungan garis ini
+            tr.skip_free = True
 
     def _check_motion(self, tr: Track, t: float, limit: float, pcu_w: dict, final: bool = False):
-        if tr.id in self.counted_ids:
+        if tr.id in self.counted_ids or tr.skip_free or not getattr(self, "_count_outside", True):
             return
         thr = max(18.0, tr.size * (2.0 if tr.cls == "other" else 1.1))
         need_hits = 5 if tr.cls == "other" else 3
@@ -156,18 +162,27 @@ class Analytics:
         vx, vy = tr.direction_vec
         fy = tr.foot[1] - tr.first_foot[1]
         direction = 1 if (fy if abs(fy) > 1 else vy) > 0 else 2
-        self._register(tr, FREE_LINE, direction, "lacak", limit, pcu_w)
+        self._register(tr, FREE_LINE, direction, "lacak", limit, pcu_w, lane=0 if direction == 1 else 1)
 
-    def _register(self, tr: Track, ln: dict, direction: int, via: str, limit: float, pcu_w: dict):
+    @staticmethod
+    def _lane(ln: dict) -> int:
+        """0 bila panah garis menunjuk ke bawah/kanan layar, 1 bila ke atas/kiri (untuk lajur lencana peristiwa)."""
+        dx, dy = ln["p2"][0] - ln["p1"][0], ln["p2"][1] - ln["p1"][1]
+        vx, vy = -dy, dx                                 # arah panah
+        return 0 if (vy > 0 if abs(vy) >= abs(vx) else vx > 0) else 1
+
+    def _register(self, tr: Track, ln: dict, direction: int, via: str, limit: float, pcu_w: dict, lane: int | None = None):
         cls = tr.cls
+        if lane is None:
+            lane = self._lane(ln)
         self.line_counts[ln["id"]][f"d{direction}:{cls}"] += 1
         first = tr.id not in self.counted_ids
         if first:
             self.counted_ids.add(tr.id)
             self.totals[cls] += 1
         ev = {"t": time.time(), "id": tr.id, "cls": cls, "line": ln["name"],
-              "dir": ln.get("dir1" if direction == 1 else "dir2", f"Arah {direction}"),
-              "speed": None if tr.speed_kmh is None else round(tr.speed_kmh, 1), "first": first, "via": via, "d": direction}
+              "dir": ("Mendekat" if direction == 1 else "Menjauh") if ln.get("free") else ln.get("dir", "Arah"),
+              "speed": None if tr.speed_kmh is None else round(tr.speed_kmh, 1), "first": first, "via": via, "d": direction, "lane": lane}
         self.events.append(ev)
         if first:
             m = self._minute(ev["t"])
@@ -241,8 +256,10 @@ class Analytics:
                 d2 = {k.split(":")[1]: v for k, v in c.items() if k.startswith("d2:")}
                 if ln["id"] == "_free" and not (d1 or d2):
                     continue
-                lines.append({"id": ln["id"], "name": ln["name"], "dir1": ln.get("dir1", "Arah 1"), "dir2": ln.get("dir2", "Arah 2"),
-                              "d1": sum(d1.values()), "d2": sum(d2.values()), "d1_by": d1, "d2_by": d2, "free": ln["id"] == "_free"})
+                by = Counter(d1) + Counter(d2)
+                lines.append({"id": ln["id"], "name": ln["name"], "dir": ln.get("dir", "Arah"), "color": ln.get("color"),
+                              "count": sum(by.values()), "by": dict(by), "free": ln["id"] == "_free",
+                              "d1": sum(d1.values()), "d2": sum(d2.values())})
             return {
                 "totals": {c: self.totals.get(c, 0) for c in CLASS_LABEL}, "total": total,
                 "unique_seen": len(self.seen_ids),
@@ -259,7 +276,7 @@ class Analytics:
                 "lines": lines,
                 "tracks": sorted(self.cur_tracks, key=lambda t: -t["age"])[:40],
                 "recent": [{**e, "ts": e["t"], "t": datetime.fromtimestamp(e["t"]).strftime("%H:%M:%S")} for e in list(self.events)[-14:]][::-1],
-                "ticker": [{"ts": e["t"], "cls": e["cls"], "d": e.get("d", 1)} for e in self.events if e["first"] and now - e["t"] <= 120][-80:],
+                "ticker": [{"ts": e["t"], "cls": e["cls"], "d": e.get("lane", 0) + 1} for e in self.events if e["first"] and now - e["t"] <= 120][-80:],
                 "since": datetime.fromtimestamp(self.t_start).astimezone().isoformat(timespec="seconds"),
                 "storage": self.storage.stats() if self.storage else None,
             }

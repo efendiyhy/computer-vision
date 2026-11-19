@@ -223,3 +223,45 @@ def test_youtube_errors_are_readable(monkeypatch):
     except SourceError as e:
         assert "YouTube" in str(e)
     assert "bot" in resolver._friendly("ERROR: Sign in to confirm you're not a bot")
+
+
+def _one_way_cfg(tmp_path):
+    cfg = make_cfg(tmp_path)
+    # p1 kiri -> p2 kanan: panah menunjuk ke BAWAH layar
+    cfg.update({"lines": [{"id": "A", "name": "Garis A", "dir": "Mendekat", "p1": [0.0, 0.55], "p2": [1.0, 0.55]}], "count_outside": False}, save=False)
+    return cfg
+
+
+def test_line_counts_only_arrow_direction(tmp_path):
+    down = [(i / 6, [Detection(300, 80 + i * 10, 380, 130 + i * 10, .9, "car")]) for i in range(30)]
+    up = [(i / 6, [Detection(300, 330 - i * 10, 380, 380 - i * 10, .9, "car")]) for i in range(30)]
+    cfg = _one_way_cfg(tmp_path)
+    assert run(make_an(cfg), Tracker(), down)["total"] == 1
+    assert run(make_an(cfg), Tracker(), up)["total"] == 0, "lawan arah panah tidak boleh dihitung"
+
+
+def test_legacy_two_direction_line_becomes_two_lines():
+    from emisisense_vision.config import normalize_lines
+    out = normalize_lines([{"id": "A", "name": "Garis A", "p1": [0, .5], "p2": [1, .5], "dir1": "Maju", "dir2": "Mundur"}])
+    assert len(out) == 2 and {l["dir"] for l in out} == {"Maju", "Mundur"}
+    assert len({l["color"] for l in out}) == 2 and all(l["id"] for l in out)
+
+
+def test_windrose_and_compass():
+    from emisisense_vision.wind import compass, windrose
+    assert compass(0)["abbr"] == "U" and compass(135)["abbr"] == "TG" and compass(359)["abbr"] == "U" and compass(None) is None
+    w = windrose([(8, 90)] * 6 + [(20, 270)] * 2 + [(0.2, 10)] * 2)
+    assert w["n"] == 10 and w["calm_pct"] == 20.0
+    assert w["prevailing"]["abbr"] == "T" and round(w["prevailing"]["pct"]) == 60
+    assert abs(sum(s["pct"] for s in w["sectors"]) + w["calm_pct"] - 100) < 0.1
+
+
+def test_windrose_storage(tmp_path):
+    import time as _t
+    st = Storage(str(tmp_path / "w.db"))
+    loc = {"lat": -7.98, "lon": 112.63}
+    now = int(_t.time() // 3600 * 3600)
+    st.upsert_wind([(now - 3600, 10, 90, 15), (now - 7200, 12, 100, 18), (now - 90 * 3600, 5, 270, 9)], loc)
+    w = st.windrose(24, loc)
+    assert w["n"] == 2 and w["prevailing"]["abbr"] == "T"
+    assert st.windrose(24 * 7, loc)["n"] == 3

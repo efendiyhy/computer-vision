@@ -24,6 +24,45 @@ def _ema(old, new, a=0.2):
     return new if old in (None, 0) else (1 - a) * old + a * new
 
 
+
+ZONE_BGR = (238, 211, 34)          # cyan #22d3ee (BGR)
+
+
+def hex_bgr(h, default=(0, 212, 255)):
+    try:
+        h = h.lstrip("#")
+        return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
+    except Exception:
+        return default
+
+
+def draw_line_arrows(img, a, b, col, sc=1.0, n=3):
+    """Panah blok di sepanjang garis, menunjuk ke arah yang dihitung (ke kanan orang yang berjalan dari a ke b)."""
+    d = b - a
+    L = float(np.hypot(*d))
+    if L < 12:
+        return
+    u = d / L
+    v = np.array([-u[1], u[0]])                      # arah panah = arah kendaraan yang dihitung
+    ln_, sw, hw, hl = 34 * sc, 5.5 * sc, 13 * sc, 15 * sc
+    shaft = ln_ - hl
+    for f in np.linspace(0.18, 0.82, n):
+        o = a + d * f + v * (7 * sc)
+        pts = [(0, -sw), (shaft, -sw), (shaft, -hw), (ln_, 0), (shaft, hw), (shaft, sw), (0, sw)]
+        poly = np.array([o + v * x + u * y for x, y in pts], np.int32)
+        cv2.fillPoly(img, [poly], col, cv2.LINE_AA)
+        cv2.polylines(img, [poly], True, (0, 0, 0), max(1, int(1.6 * sc)), cv2.LINE_AA)
+
+
+def _chip(img, text, org, col, sc=1.0, below=False):
+    fs = 0.5 * sc ** 0.5
+    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+    H, W = img.shape[:2]
+    x = int(min(max(2, org[0]), W - tw - 10)); y = int(min(max(th + 6, org[1] + (th + 8 if below else 0)), H - 4))
+    cv2.rectangle(img, (x - 3, y - th - 5), (x + tw + 4, y + 4), col, -1)
+    lum = 0.114 * col[0] + 0.587 * col[1] + 0.299 * col[2]
+    cv2.putText(img, text, (x, y - 1), cv2.FONT_HERSHEY_SIMPLEX, fs, (20, 20, 20) if lum > 140 else (255, 255, 255), 1, cv2.LINE_AA)
+
 class Pipeline:
     def __init__(self, cfg: Config, analytics: Analytics, demo: bool = False):
         self.cfg, self.an, self.demo = cfg, analytics, demo
@@ -253,14 +292,23 @@ class Pipeline:
         img = frame.copy()
         H, W = img.shape[:2]
         d = cfg["display"]
-        if d["roi"]:
+        sc = max(0.8, W / 800.0)
+        if d["roi"]:                                        # zona: cyan, isi tipis
             roi = np.array([[p[0] * W, p[1] * H] for p in cfg["roi"]], np.int32)
-            cv2.polylines(img, [roi], True, (90, 200, 255), 1, cv2.LINE_AA)
-        if d["lines"]:
+            tint = img.copy()
+            cv2.fillPoly(tint, [roi], ZONE_BGR)
+            img = cv2.addWeighted(tint, 0.10, img, 0.90, 0)
+            cv2.polylines(img, [roi], True, (0, 0, 0), max(3, int(3.5 * sc)), cv2.LINE_AA)
+            cv2.polylines(img, [roi], True, ZONE_BGR, max(2, int(2 * sc)), cv2.LINE_AA)
+            _chip(img, "Zona", (int(roi[0][0]) + 6, int(roi[0][1]) + 6), ZONE_BGR, sc, below=True)
+        if d["lines"]:                                      # garis: warna sendiri-sendiri, panah di sepanjang garis
             for ln in cfg["lines"]:
-                a = (int(ln["p1"][0] * W), int(ln["p1"][1] * H)); b = (int(ln["p2"][0] * W), int(ln["p2"][1] * H))
-                cv2.line(img, a, b, (0, 200, 255), 2, cv2.LINE_AA)
-                cv2.putText(img, ln["name"], (a[0] + 4, a[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
+                col = hex_bgr(ln.get("color"), (0, 212, 255))
+                a = np.array([ln["p1"][0] * W, ln["p1"][1] * H]); b = np.array([ln["p2"][0] * W, ln["p2"][1] * H])
+                cv2.line(img, tuple(a.astype(int)), tuple(b.astype(int)), (0, 0, 0), max(5, int(5.5 * sc)), cv2.LINE_AA)
+                cv2.line(img, tuple(a.astype(int)), tuple(b.astype(int)), col, max(3, int(3 * sc)), cv2.LINE_AA)
+                draw_line_arrows(img, a, b, col, sc)
+                _chip(img, f"{ln['name']}: {ln.get('dir', '')}", (int(a[0]) + 6, int(a[1]) - 6), col, sc)
         with self._view_lock:
             view = self._view
         dt = max(0.0, min(ts - view["t"], 1.2))

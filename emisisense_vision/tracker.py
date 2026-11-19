@@ -39,9 +39,11 @@ class Track:
         self.speed_kmh: float | None = None
         self.max_speed = 0.0
         self.side: dict[str, int] = {}
+        self.side0: dict[str, int] = {}      # sisi garis tempat trek pertama kali terlihat (asal)
         self.counted: set[tuple[str, int]] = set()
         self.counted_unique = False
         self.in_roi = False
+        self.skip_free = False     # pernah melintasi garis berlawanan panah: bukan kendaraan 'di luar garis'
 
     def _vote(self, det: Detection):
         w = 0.15 if det.cls == "other" else max(det.conf, 0.05)

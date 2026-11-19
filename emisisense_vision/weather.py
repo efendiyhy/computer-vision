@@ -7,6 +7,7 @@ Data diambil di sisi server dan di-cache; dashboard hanya membaca dari server in
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 import urllib.parse
@@ -70,8 +71,9 @@ def parse_forecast(js: dict) -> dict:
 
 
 class WeatherService:
-    def __init__(self, cfg: Config, interval: float = 60.0, demo: bool = False, on_data=None):
+    def __init__(self, cfg: Config, interval: float = 60.0, demo: bool = False, on_data=None, on_wind=None):
         self.on_data = on_data
+        self.on_wind = on_wind          # callback(rows, loc): riwayat angin per jam untuk mawar angin
         self.cfg = cfg
         self.interval = interval
         self.demo = demo
@@ -95,10 +97,33 @@ class WeatherService:
         with self._lock:
             return dict(self._data)
 
+    def _wind_history(self, loc: dict, demo: bool):
+        """Ambil riwayat angin 30 hari terakhir (per jam) agar mawar angin langsung terisi."""
+        if not self.on_wind:
+            return
+        try:
+            if demo:
+                from .wind import demo_history
+                rows = demo_history()
+            else:
+                js = _get_json(FORECAST_URL, {"latitude": loc["lat"], "longitude": loc["lon"], "timezone": "GMT", "timeformat": "unixtime",
+                                              "past_days": 30, "forecast_days": 1,
+                                              "hourly": "wind_speed_10m,wind_direction_10m,wind_gusts_10m"})
+                h, now = js.get("hourly") or {}, time.time()
+                rows = [(t, s_, d_, g_) for t, s_, d_, g_ in zip(h.get("time", []), h.get("wind_speed_10m", []), h.get("wind_direction_10m", []),
+                                                                 h.get("wind_gusts_10m", [])) if t <= now and s_ is not None and d_ is not None]
+            self.on_wind(rows, loc)
+            self._wind_t, self._wind_loc = time.time(), (loc["lat"], loc["lon"])
+        except Exception:
+            pass
+
     def _loop(self):
         last_air = 0.0
+        self._wind_t, self._wind_loc = 0.0, None
         while not self._stop.is_set():
             loc = self.cfg["location"]
+            if self._wind_loc != (loc["lat"], loc["lon"]) or time.time() - self._wind_t > 6 * 3600:
+                self._wind_history(loc, self.demo)
             try:
                 if self.demo:
                     data = demo_weather(loc)
@@ -141,8 +166,9 @@ def demo_weather(loc: dict) -> dict:
     """Data contoh (bentuk sama dengan Open-Meteo) untuk mode --demo atau saat offline."""
     now = datetime.now().astimezone()
     cur = {"time": now.strftime("%Y-%m-%dT%H:%M"), "temperature_2m": 28.4, "relative_humidity_2m": 71, "apparent_temperature": 31.2,
-           "precipitation": 0.0, "weather_code": 2, "cloud_cover": 46, "pressure_msl": 1010.2, "wind_speed_10m": 9.4,
-           "wind_direction_10m": 135, "wind_gusts_10m": 18.0, "is_day": 1}
+           "precipitation": 0.0, "weather_code": 2, "cloud_cover": 46, "pressure_msl": 1010.2,
+           "wind_speed_10m": round(9.4 + 3 * math.sin(now.timestamp() / 900), 1),
+           "wind_direction_10m": round((135 + 50 * math.sin(now.timestamp() / 1800)) % 360), "wind_gusts_10m": 18.0, "is_day": 1}
     cur["desc"] = describe(2, 1)
     hourly = []
     for i in range(13):

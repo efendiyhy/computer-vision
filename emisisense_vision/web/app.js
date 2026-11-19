@@ -5,6 +5,7 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const KEYS = ["car", "motorbike", "bus", "truck", "bicycle", "other"];
 const LABEL = { car: "Mobil", motorbike: "Motor", bus: "Bus", truck: "Truk", bicycle: "Sepeda", other: "Lainnya" };
+const ZONE = "#22d3ee", LINE_COLORS = ["#ffd400", "#ff4fa3", "#7cff4f", "#ff8a00", "#c77dff", "#ffffff"];
 const DEFAULT_SRC = "https://cctvmalang.24hour.id/twentyfourhourid/proxy.php?id=767576969564466612969572";
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const colorOf = k => css("--c-" + k) || "#7a8691";
@@ -38,7 +39,8 @@ function route() {
   $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view));
   $("#pageTitle").textContent = TITLES[view];
   document.title = TITLES[view] + " · EmisiSense Vision";
-  if (view === "history") loadHistory();
+  if (view === "history") { loadHistory(); loadWind(); }
+  if (view === "live") loadWind();
   if (view === "source") initSourceView();
   if (view === "detect") initDetectView();
   if (view === "system") { checkUpdate(false); }
@@ -60,7 +62,62 @@ function wxIcon(k) {
   return `<svg viewBox="0 0 64 64" aria-hidden="true">${m[k] || m.cloudy}</svg>`;
 }
 const AQI = [[50, "Baik"], [100, "Sedang"], [150, "Tidak sehat bagi kelompok sensitif"], [200, "Tidak sehat"], [300, "Sangat tidak sehat"], [1e9, "Berbahaya"]];
-const compass = d => d == null ? "" : ["U", "TL", "T", "TG", "S", "BD", "B", "BL"][Math.round(d / 45) % 8];
+const C16 = ["U", "UTL", "TL", "TTL", "T", "TTG", "TG", "STG", "S", "SBD", "BD", "BBD", "B", "BBL", "BL", "UBL"];
+const C16N = ["Utara", "Utara-timur laut", "Timur laut", "Timur-timur laut", "Timur", "Timur-tenggara", "Tenggara", "Selatan-tenggara", "Selatan", "Selatan-barat daya", "Barat daya", "Barat-barat daya", "Barat", "Barat-barat laut", "Barat laut", "Utara-barat laut"];
+const sec16 = d => Math.floor((((d % 360) + 360) % 360 + 11.25) / 22.5) % 16;
+const compass = d => d == null ? "" : C16[sec16(d)];
+const compassName = d => d == null ? "" : C16N[sec16(d)];
+const polar = (cx, cy, r, deg) => [cx + r * Math.sin(deg * Math.PI / 180), cy - r * Math.cos(deg * Math.PI / 180)];
+const wedge = (cx, cy, r0, r1, a0, a1) => { const p = (r, a) => polar(cx, cy, r, a).map(v => v.toFixed(1)).join(" "); return `M${p(r1, a0)} A${r1} ${r1} 0 0 1 ${p(r1, a1)} L${p(r0, a1)} ${r0 > 0 ? `A${r0} ${r0} 0 0 0 ${p(r0, a0)}` : ""} Z`; };
+
+/* kompas kecil untuk kartu cuaca: panah menunjuk ke mana angin bertiup (kebalikan dari arah asal) */
+function windCompass(deg) {
+  const c = 39, to = ((deg || 0) + 180) % 360, tip = polar(c, c, 27, to), tail = polar(c, c, 14, deg || 0);
+  const l = polar(c, c, 8, to + 90), r = polar(c, c, 8, to - 90), back = polar(c, c, 22, to);
+  return `<svg viewBox="0 0 78 78" role="img" aria-label="Arah angin"><circle cx="${c}" cy="${c}" r="35" fill="none" stroke="${css("--line")}" stroke-width="1.5"/>${[0, 90, 180, 270].map(a => { const p1 = polar(c, c, 35, a), p2 = polar(c, c, 30, a); return `<line x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${p2[1]}" stroke="${css("--mute")}" stroke-width="1.5"/>`; }).join("")}
+  <text x="${c}" y="9" text-anchor="middle" style="font:700 8px sans-serif;fill:${css("--ink")}">U</text><text x="${c}" y="75" text-anchor="middle" style="font:700 8px sans-serif;fill:${css("--mute")}">S</text><text x="72" y="${c + 3}" text-anchor="middle" style="font:700 8px sans-serif;fill:${css("--mute")}">T</text><text x="6" y="${c + 3}" text-anchor="middle" style="font:700 8px sans-serif;fill:${css("--mute")}">B</text>
+  <polygon points="${tip[0]},${tip[1]} ${l[0]},${l[1]} ${back[0]},${back[1]} ${r[0]},${r[1]}" fill="${css("--accent")}"/><circle cx="${c}" cy="${c}" r="2.5" fill="${css("--accent-ink")}"/></svg>`;
+}
+
+/* mawar angin: 16 arah, batang bertumpuk menurut kelas kecepatan; panjang = persen waktu angin datang dari arah itu */
+const WR_OP = [.28, .45, .62, .8, 1];
+function windRose(el, w) {
+  if (!w || !w.n) { el.innerHTML = '<div class="empty">Belum ada data angin untuk rentang ini. Data muncul setelah cuaca Open-Meteo terambil.</div>'; return; }
+  const S = 300, cx = 150, cy = 150, R = 100, mx = Math.max(...w.sectors.map(s => s.pct), 1), top = Math.max(2, Math.ceil(mx * 1.15 / 4) * 4), ring = top / 4;
+  const rr = v => v / top * R; let g = "";
+  for (let i = 1; i <= 4; i++) g += `<circle cx="${cx}" cy="${cy}" r="${rr(ring * i)}" fill="none" stroke="${css("--line2")}" stroke-width="1"/><text x="${cx + 3}" y="${cy - rr(ring * i) - 2}" style="font-size:9px">${fmt(ring * i, ring < 1 ? 1 : 0)}%</text>`;
+  for (let i = 0; i < 16; i++) { const p = polar(cx, cy, R, i * 22.5); g += `<line x1="${cx}" y1="${cy}" x2="${p[0]}" y2="${p[1]}" stroke="${css("--line2")}" stroke-width="1"/>`; }
+  const cols = [];
+  w.sectors.forEach(s => {
+    let acc = 0; const a0 = s.deg - 9.6, a1 = s.deg + 9.6;
+    s.bins.forEach((b, k) => { if (!b) return; g += `<path d="${wedge(cx, cy, rr(acc), rr(acc + b), a0, a1)}" fill="${css("--accent")}" fill-opacity="${WR_OP[k]}" stroke="${css("--panel")}" stroke-width=".6"/>`; acc += b; });
+  });
+  w.sectors.forEach(s => { const main = s.i % 4 === 0, p = polar(cx, cy, R + (main ? 13 : 11), s.deg); g += `<text x="${p[0]}" y="${p[1] + 3.5}" text-anchor="middle" class="${main ? "wr-card" : ""}" style="${main ? "" : "font-size:9px"}">${s.abbr}</text>`; });
+  g += `<circle cx="${cx}" cy="${cy}" r="17" fill="${css("--panel")}" stroke="${css("--line")}"/><text x="${cx}" y="${cy - 1}" text-anchor="middle" style="font-size:8.5px">tenang</text><text x="${cx}" y="${cy + 9}" text-anchor="middle" class="wr-card" style="font-size:10px">${fmt(w.calm_pct, 0)}%</text>`;
+  el.innerHTML = `<svg viewBox="0 0 ${S} ${S}" role="img" aria-label="Mawar angin 16 arah">${g}</svg><div class="legend">${w.bins.map((b, k) => `<span><i class="sq" style="background:${css("--accent")};opacity:${WR_OP[k]}"></i>${b}</span>`).join("")}<span class="muted">km/jam</span></div>`;
+  const svg = el.querySelector("svg"); el._cols = null;
+  if (!svg._bound) { svg._bound = true;
+    svg.addEventListener("pointermove", e => { const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * S - cx, y = (e.clientY - r.top) / r.height * S - cy, d = Math.hypot(x, y); if (d < 17 || d > R + 6) return tipHide();
+      const ang = (Math.atan2(x, -y) * 180 / Math.PI + 360) % 360, s = el._w.sectors[sec16(ang)];
+      tipShow(`<b>Dari ${esc(s.name)} (${s.abbr})</b><br>${fmt(s.pct, 1)}% dari waktu<br>${s.bins.map((b, k) => b ? `${el._w.bins[k]} km/j: ${fmt(b, 1)}%` : "").filter(Boolean).join("<br>")}`, e); });
+    svg.addEventListener("pointerleave", tipHide); }
+  el._w = w;
+}
+function windNote(w) { return !w || !w.n ? "" : `${w.prevailing ? `Angin paling sering datang dari <b>${esc(w.prevailing.name)}</b> (${fmt(w.prevailing.pct, 0)}% waktu). ` : ""}Kecepatan rata-rata ${fmt(w.mean_speed, 1)} km/jam, tertinggi ${fmt(w.max_speed, 0)}; tenang ${fmt(w.calm_pct, 0)}%. ${w.n} jam pengamatan.`; }
+let windH = 24;
+async function loadWind() {
+  try {
+    if (view === "live") { const w = await api(`/api/windrose?hours=${windH}`); windRose($("#windRose"), w); $("#windNote").innerHTML = windNote(w); }
+    if (view === "history") {
+      const w = await api(`/api/windrose?hours=${histH}`); windRose($("#histRose"), w);
+      $("#histWindRange").textContent = `${histH >= 48 ? Math.round(histH / 24) + " hari" : histH + " jam"} terakhir · ${w.n || 0} jam data`;
+      const top = [...(w.sectors || [])].sort((a, b) => b.pct - a.pct).filter(s => s.pct > 0).slice(0, 8);
+      $("#histWindTbl").innerHTML = w.n ? `<p>${windNote(w)}</p><table><thead><tr><th>Dari arah</th><th class="num">Persen waktu</th><th class="num">Kecepatan (perkiraan)</th></tr></thead><tbody>${top.map(s => `<tr><td>${esc(s.name)} (${s.abbr})</td><td class="num">${fmt(s.pct, 1)}%</td><td class="num">${fmt(((s.bins.reduce((a, b, k) => a + b * [3, 7.5, 15, 25, 35][k], 0)) / (s.pct || 1)), 1)} km/j</td></tr>`).join("")}</tbody></table>` : "";
+    }
+  } catch (e) { /* ulangi pada siklus berikutnya */ }
+}
+setInterval(loadWind, 60000);
+document.addEventListener("click", e => { const b = e.target.closest("#segWind button"); if (!b) return; windH = +b.dataset.h; $$("#segWind button").forEach(x => x.classList.toggle("on", x === b)); loadWind(); });
 
 /* ============================== tooltip grafik ============================== */
 const tip = $("#tip");
@@ -173,7 +230,8 @@ function renderWeather(w) {
   const c = w.current, u = w.units || {}, aq = w.air_quality || {};
   let h = `<div class="panel-head"><h2>Cuaca &amp; udara</h2><span class="muted small">${esc(w.location?.name || "")} · ${w.source === "demo" ? "data contoh" : "Open-Meteo"} · ${(w.updated || "").slice(11, 16)}</span></div>
   <div class="wx-top"><div class="wx-ico">${wxIcon(c.desc.icon)}</div><div><div class="wx-t">${fmt(c.temperature_2m, 1)}<sup>${esc(u.temperature_2m || "°C")}</sup></div><div class="wx-d">${esc(c.desc.text)} · terasa ${fmt(c.apparent_temperature, 1)}°</div></div></div>
-  <div class="wx-kv"><div>Kelembapan<b>${fmt(c.relative_humidity_2m)}%</b></div><div>Angin<b>${fmt(c.wind_speed_10m, 1)} km/j ${compass(c.wind_direction_10m)}</b></div><div>Hujan<b>${fmt(c.precipitation, 1)} mm</b></div><div>Tekanan<b>${fmt(c.pressure_msl)} hPa</b></div><div>Awan<b>${fmt(c.cloud_cover)}%</b></div><div>Hembusan<b>${fmt(c.wind_gusts_10m)} km/j</b></div></div>
+  <div class="wx-kv"><div>Kelembapan<b>${fmt(c.relative_humidity_2m)}%</b></div><div>Hujan<b>${fmt(c.precipitation, 1)} mm</b></div><div>Tekanan<b>${fmt(c.pressure_msl)} hPa</b></div><div>Awan<b>${fmt(c.cloud_cover)}%</b></div></div>
+  <div class="wx-wind">${windCompass(c.wind_direction_10m)}<div><b>Angin dari ${esc(compassName(c.wind_direction_10m))} (${esc(compass(c.wind_direction_10m))}, ${fmt(c.wind_direction_10m)}°)</b><div>${fmt(c.wind_speed_10m, 1)} km/jam · hembusan ${fmt(c.wind_gusts_10m)} km/jam</div><div class="muted">bertiup ke ${esc(compassName((c.wind_direction_10m + 180) % 360))}</div></div></div>
   <div class="wx-hours">${(w.hourly || []).map(x => `<div class="wx-h">${esc(String(x.time).slice(-5))}${wxIcon(x.desc.icon)}<b>${fmt(x.temp, 0)}°</b>${x.pop != null ? x.pop + "%" : ""}</div>`).join("")}</div>`;
   if (aq && aq.us_aqi != null) {
     const [, txt] = AQI.find(a => aq.us_aqi <= a[0]); const pos = Math.min(100, aq.us_aqi / 300 * 100);
@@ -199,10 +257,12 @@ function renderCharts(s) {
 }
 
 function renderZoneLines(s) {
-  $("#linesBox").innerHTML = s.lines.map(l => { const m = Math.max(1, l.d1, l.d2);
-    return `<div class="ln"><h3>${esc(l.name)}${l.free ? "<small>kendaraan bergerak yang tidak melewati garis</small>" : ""}</h3>
-    <div class="dir"><span>${esc(l.dir1)}</span><div class="bar"><i style="width:${l.d1 / m * 100}%;background:var(--accent)"></i></div><b>${l.d1}</b></div>
-    <div class="dir"><span>${esc(l.dir2)}</span><div class="bar"><i style="width:${l.d2 / m * 100}%;background:var(--paint)"></i></div><b>${l.d2}</b></div></div>`; }).join("") || '<div class="empty">Belum ada garis. Tekan “Atur garis”.</div>';
+  const mx = Math.max(1, ...s.lines.map(l => l.count));
+  $("#linesBox").innerHTML = s.lines.map(l => {
+    const col = l.free ? "var(--mute)" : (l.color || "var(--accent)");
+    const chips = KEYS.filter(k => l.by[k]).map(k => `<span><i class="dot" style="background:${colorOf(k)}"></i>${LABEL[k]} ${l.by[k]}</span>`).join("");
+    return `<div class="ln"><h3><i class="swatch" style="background:${col}"></i>${esc(l.name)}<small>${l.free ? "bergerak tanpa melewati garis" : "→ " + esc(l.dir)}</small></h3>
+    <div class="dir"><span>${l.free ? "Lainnya" : "Dihitung"}</span><div class="bar"><i style="width:${l.count / mx * 100}%;background:${col}"></i></div><b>${l.count}</b></div>${chips ? `<div class="chips">${chips}</div>` : ""}</div>`; }).join("") || '<div class="empty">Belum ada garis. Tekan “Atur garis”.</div>';
 }
 
 function renderTables(s) {
@@ -234,21 +294,31 @@ const ov = $("#overlay"), stage = $("#stage"), editor = $("#editor");
 let mode = null, drag = null, calPts = [], selLine = 0;
 function fitOverlay() { const r = stage.getBoundingClientRect(); const d = devicePixelRatio || 1; ov.width = Math.round(r.width * d); ov.height = Math.round(r.height * d); drawOverlay(); }
 new ResizeObserver(fitOverlay).observe(stage);
+/* panah blok di sepanjang garis: menunjuk ke arah yang dihitung (kanan orang yang berjalan dari p1 ke p2); sama dengan gambar di video */
+function arrowGlyphs(c, a, b, col, d) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy); if (L < 14 * d) return;
+  const ux = dx / L, uy = dy / L, vx = -uy, vy = ux, sc = Math.max(.8, ov.width / d / 800) * d, len = 34 * sc, sw = 5.5 * sc, hw = 13 * sc, hl = 15 * sc, sh = len - hl;
+  [.18, .5, .82].forEach(f => {
+    const ox = a[0] + dx * f + vx * 7 * sc, oy = a[1] + dy * f + vy * 7 * sc;
+    const pts = [[0, -sw], [sh, -sw], [sh, -hw], [len, 0], [sh, hw], [sh, sw], [0, sw]].map(([x, y]) => [ox + vx * x + ux * y, oy + vy * x + uy * y]);
+    c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p)); c.closePath(); c.fillStyle = col; c.fill(); c.lineWidth = 1.6 * d; c.strokeStyle = "#000"; c.stroke();
+  });
+}
 function drawOverlay() {
   const c = ov.getContext("2d"), W = ov.width, H = ov.height, d = devicePixelRatio || 1; c.clearRect(0, 0, W, H);
   if (!mode || !CFG) return;
   const P = p => [p[0] * W, p[1] * H];
   const handle = (p, col, sel) => { const [x, y] = P(p); c.beginPath(); c.arc(x, y, (sel ? 10 : 8) * d, 0, 7); c.fillStyle = col; c.fill(); c.lineWidth = 2.5 * d; c.strokeStyle = "#fff"; c.stroke(); };
   if (mode === "lines") CFG.lines.forEach((l, i) => {
-    const a = P(l.p1), b = P(l.p2), col = i === selLine ? "#f5b800" : "#5fb4ff";
-    c.strokeStyle = col; c.lineWidth = 3 * d; c.beginPath(); c.moveTo(...a); c.lineTo(...b); c.stroke(); handle(l.p1, col, i === selLine); handle(l.p2, col, i === selLine);
-    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = dy / L, ny = -dx / L;
-    c.fillStyle = "rgba(0,0,0,.65)"; c.font = `${12 * d}px sans-serif`; const t1 = `→ ${l.dir1}`, tw = c.measureText(t1).width;
-    const tx = mx - nx * 34 * d, ty = my - ny * 34 * d; c.fillRect(tx - tw / 2 - 5 * d, ty - 11 * d, tw + 10 * d, 18 * d); c.fillStyle = "#fff"; c.textAlign = "center"; c.fillText(t1, tx, ty + 3 * d);
-    c.strokeStyle = col; c.beginPath(); c.moveTo(mx, my); c.lineTo(mx - nx * 22 * d, my - ny * 22 * d); c.stroke();
+    const a = P(l.p1), b = P(l.p2), col = l.color || LINE_COLORS[i % LINE_COLORS.length], sel = i === selLine;
+    c.lineCap = "round"; c.strokeStyle = "#000"; c.lineWidth = (sel ? 8 : 6.5) * d; c.beginPath(); c.moveTo(...a); c.lineTo(...b); c.stroke();
+    c.strokeStyle = col; c.lineWidth = (sel ? 4.5 : 3.5) * d; c.beginPath(); c.moveTo(...a); c.lineTo(...b); c.stroke();
+    arrowGlyphs(c, a, b, col, d); handle(l.p1, col, sel); handle(l.p2, col, sel);
+    const txt = `${l.name}: ${l.dir}`; c.font = `600 ${12.5 * d}px sans-serif`; const tw = c.measureText(txt).width;
+    c.fillStyle = col; c.fillRect(a[0] + 8 * d, a[1] - 24 * d, tw + 12 * d, 19 * d); c.fillStyle = "#1a1a1a"; c.textAlign = "left"; c.fillText(txt, a[0] + 14 * d, a[1] - 10 * d);
   });
-  if (mode === "roi") { c.beginPath(); CFG.roi.forEach((p, i) => { const [x, y] = P(p); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.closePath(); c.fillStyle = "rgba(95,180,255,.16)"; c.fill(); c.strokeStyle = "#5fb4ff"; c.lineWidth = 3 * d; c.stroke(); CFG.roi.forEach(p => handle(p, "#5fb4ff")); }
-  if (mode === "cal") { if (calPts.length === 2) { c.beginPath(); c.moveTo(...P(calPts[0])); c.lineTo(...P(calPts[1])); c.strokeStyle = "#f5b800"; c.lineWidth = 3 * d; c.stroke(); } calPts.forEach(p => handle(p, "#f5b800")); }
+  if (mode === "roi") { c.beginPath(); CFG.roi.forEach((p, i) => { const [x, y] = P(p); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.closePath(); c.fillStyle = "rgba(34,211,238,.14)"; c.fill(); c.strokeStyle = "#000"; c.lineWidth = 5.5 * d; c.stroke(); c.strokeStyle = ZONE; c.lineWidth = 3 * d; c.stroke(); CFG.roi.forEach(p => handle(p, ZONE)); }
+  if (mode === "cal") { if (calPts.length === 2) { c.beginPath(); c.moveTo(...P(calPts[0])); c.lineTo(...P(calPts[1])); c.strokeStyle = "#34d399"; c.lineWidth = 3 * d; c.stroke(); } calPts.forEach(p => handle(p, "#34d399")); }
 }
 const pos = e => { const r = ov.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
 function nearest(p) {
@@ -275,20 +345,23 @@ function renderEditor() {
   if (!mode) { editor.hidden = true; return; } editor.hidden = false;
   if (mode === "lines") {
     selLine = Math.min(selLine, CFG.lines.length - 1); const l = CFG.lines[selLine];
-    editor.innerHTML = `<p><b>Atur garis hitung.</b> Seret titik di ujung garis untuk memindahkannya; tekan titik untuk memilih garis. Panah kuning menunjukkan arah “${esc(l.dir1)}”. Letakkan garis melintang di jalur kendaraan.</p>
-    <div class="tools"><select id="eSel" aria-label="Garis dipilih">${CFG.lines.map((x, i) => `<option value="${i}" ${i === selLine ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
-    <input id="eName" value="${esc(l.name)}" aria-label="Nama garis" placeholder="Nama"><input id="eD1" value="${esc(l.dir1)}" aria-label="Nama arah 1" placeholder="Arah 1"><input id="eD2" value="${esc(l.dir2)}" aria-label="Nama arah 2" placeholder="Arah 2">
-    <button class="btn sm" id="eFlip">Tukar arah</button><button class="btn sm" id="eAdd">Tambah garis</button><button class="btn sm danger" id="eDel" ${CFG.lines.length < 2 ? "disabled" : ""}>Hapus garis ini</button><button class="btn sm primary" id="eDone">Selesai</button></div>`;
+    editor.innerHTML = `<p><b>Atur garis hitung.</b> Satu garis menghitung <b>satu arah saja</b>: kendaraan yang lewat searah panah. Seret titik di ujung garis untuk memindahkan; tekan titik untuk memilih garis. Panah menunjuk arah yang dihitung. Jalan dua arah: buat dua garis, satu untuk tiap arah, dengan panah berlawanan.</p>
+    <div class="tools"><span class="swatch" style="background:${l.color}" title="Warna garis ini"></span><select id="eSel" aria-label="Garis dipilih">${CFG.lines.map((x, i) => `<option value="${i}" ${i === selLine ? "selected" : ""}>${esc(x.name)} → ${esc(x.dir)}</option>`).join("")}</select>
+    <input id="eName" value="${esc(l.name)}" aria-label="Nama garis" placeholder="Nama garis"><input id="eDir" value="${esc(l.dir)}" aria-label="Nama arah yang dihitung" placeholder="Nama arah (mis. Ke selatan)">
+    <button class="btn sm" id="eFlip">Balik arah panah</button><button class="btn sm" id="eAdd">Tambah garis</button><button class="btn sm danger" id="eDel" ${CFG.lines.length < 2 ? "disabled" : ""}>Hapus garis ini</button><button class="btn sm primary" id="eDone">Selesai</button></div>`;
     $("#eSel").onchange = e => { selLine = +e.target.value; renderEditor(); drawOverlay(); };
-    const upd = () => { l.name = $("#eName").value.trim() || l.name; l.dir1 = $("#eD1").value.trim() || "Arah 1"; l.dir2 = $("#eD2").value.trim() || "Arah 2"; save({ lines: CFG.lines }); drawOverlay(); };
-    ["#eName", "#eD1", "#eD2"].forEach(s => $(s).onchange = upd);
-    $("#eFlip").onclick = () => { [l.dir1, l.dir2] = [l.dir2, l.dir1]; save({ lines: CFG.lines }); renderEditor(); drawOverlay(); };
-    $("#eAdd").onclick = () => { const id = String.fromCharCode(65 + CFG.lines.length), y = Math.min(.9, .45 + .08 * CFG.lines.length); CFG.lines.push({ id, name: "Garis " + id, p1: [.1, y], p2: [.9, y], dir1: "Arah 1", dir2: "Arah 2" }); selLine = CFG.lines.length - 1; save({ lines: CFG.lines }); renderEditor(); drawOverlay(); };
-    $("#eDel").onclick = () => { CFG.lines.splice(selLine, 1); selLine = 0; save({ lines: CFG.lines }); renderEditor(); drawOverlay(); };
+    const upd = () => { l.name = $("#eName").value.trim() || l.name; l.dir = $("#eDir").value.trim() || l.dir; save({ lines: CFG.lines }); refreshLegend(); drawOverlay(); renderEditor(); };
+    ["#eName", "#eDir"].forEach(q => $(q).onchange = upd);
+    $("#eFlip").onclick = () => { [l.p1, l.p2] = [l.p2, l.p1]; save({ lines: CFG.lines }); drawOverlay(); toast("Arah panah dibalik"); };
+    $("#eAdd").onclick = () => {
+      const used = CFG.lines.map(x => x.color), color = LINE_COLORS.find(x => !used.includes(x)) || LINE_COLORS[CFG.lines.length % LINE_COLORS.length];
+      let k = 0; const ids = CFG.lines.map(x => x.id); while (ids.includes(String.fromCharCode(65 + k))) k++; const id = String.fromCharCode(65 + k), y = Math.min(.9, .45 + .08 * CFG.lines.length);
+      CFG.lines.push({ id, name: "Garis " + id, p1: [.1, y], p2: [.9, y], dir: "Arah " + id, color }); selLine = CFG.lines.length - 1; save({ lines: CFG.lines }); refreshLegend(); renderEditor(); drawOverlay(); };
+    $("#eDel").onclick = () => { CFG.lines.splice(selLine, 1); selLine = 0; save({ lines: CFG.lines }); refreshLegend(); renderEditor(); drawOverlay(); };
     $("#eDone").onclick = () => setMode(null);
   }
   if (mode === "roi") {
-    editor.innerHTML = `<p><b>Atur zona pengamatan.</b> Seret titik biru untuk membentuk zona. Kepadatan dihitung di dalam zona ini, dan deteksi difokuskan ke sini. Buat zona menutupi badan jalan saja agar bayangan dan trotoar tidak ikut.</p><div class="tools"><button class="btn sm" id="eRst">Kembalikan bawaan</button><button class="btn sm primary" id="eDone">Selesai</button></div>`;
+    editor.innerHTML = `<p><b>Atur zona pengamatan.</b> Seret titik cyan untuk membentuk zona. Kepadatan dihitung di dalam zona ini, dan deteksi difokuskan ke sini. Buat zona menutupi badan jalan saja agar bayangan dan trotoar tidak ikut.</p><div class="tools"><span class="swatch" style="background:#22d3ee" title="Warna zona"></span><button class="btn sm" id="eRst">Kembalikan bawaan</button><button class="btn sm primary" id="eDone">Selesai</button></div>`;
     $("#eRst").onclick = () => { CFG.roi = [[.05, .3], [.95, .3], [.95, .95], [.05, .95]]; save({ roi: CFG.roi }); drawOverlay(); };
     $("#eDone").onclick = () => setMode(null);
   }
@@ -314,8 +387,12 @@ $("#segMetric").onclick = e => { const b = e.target.closest("button"); if (!b) r
 addEventListener("keydown", e => { if (e.key === "Escape" && mode) setMode(mode); });
 document.addEventListener("fullscreenchange", () => setTimeout(fitOverlay, 50));
 
+function refreshLegend() {
+  $("#legend").innerHTML = KEYS.map(k => `<span><i style="background:${colorOf(k)}"></i>${LABEL[k]}</span>`).join("") +
+    `<span class="lg-sep"></span><span><i class="sq" style="background:${ZONE}"></i>Zona</span>` + CFG.lines.map(l => `<span><i class="sq" style="background:${l.color}"></i>${esc(l.name)} → ${esc(l.dir)}</span>`).join("");
+}
 function buildLegend() {
-  $("#legend").innerHTML = KEYS.map(k => `<span><i style="background:${colorOf(k)}"></i>${LABEL[k]}</span>`).join("");
+  refreshLegend();
   const lab = { boxes: "Kotak", labels: "Label", speed: "Kecepatan", trails: "Jejak", lines: "Garis", roi: "Zona", raw: "Deteksi mentah" };
   $("#toggles").innerHTML = Object.entries(lab).map(([k, v]) => `<button data-k="${k}" class="${CFG.display[k] ? "on" : ""}" aria-pressed="${!!CFG.display[k]}">${v}</button>`).join("");
   $("#toggles").onclick = async e => { const b = e.target.closest("button"); if (!b) return; CFG.display[b.dataset.k] = !CFG.display[b.dataset.k]; b.classList.toggle("on"); b.setAttribute("aria-pressed", CFG.display[b.dataset.k]); await save({ display: CFG.display }); };
@@ -336,7 +413,7 @@ async function loadHistory() {
     dualLine($("#chHistAir"), d, { name: "PM2,5", color: css("--c-truck"), vals: d.map(x => x.pm2_5), unit: "µg/m³", d: 1 }, { name: "Kendaraan", color: css("--c-bus"), vals: d.map(x => KEYS.reduce((b, k) => b + (x[k] || 0), 0)), unit: "kend." }, { label: lab });
   } catch (e) { /* coba lagi pada siklus berikutnya */ }
 }
-$("#segHist").onclick = e => { const b = e.target.closest("button"); if (!b) return; histH = +b.dataset.h; $$("#segHist button").forEach(x => x.classList.toggle("on", x === b)); loadHistory(); };
+$("#segHist").onclick = e => { const b = e.target.closest("button"); if (!b) return; histH = +b.dataset.h; $$("#segHist button").forEach(x => x.classList.toggle("on", x === b)); loadHistory(); loadWind(); };
 setInterval(loadHistory, 30000);
 $$("[data-exp]").forEach(a => a.onclick = e => { e.preventDefault(); const q = new URLSearchParams(); if ($("#dFrom").value) q.set("from", $("#dFrom").value); if ($("#dTo").value) q.set("to", $("#dTo").value); location.href = `/api/export/${a.dataset.exp}.csv?${q}`; });
 

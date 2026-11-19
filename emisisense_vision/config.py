@@ -28,11 +28,14 @@ DEFAULTS: dict = {
     "jpeg_quality": 72,
     "classes": ["car", "motorbike", "bus", "truck", "bicycle"],
     "location": {"name": "Kota Malang", "lat": -7.9797, "lon": 112.6304},
-    # Garis hitung (koordinat ternormalisasi 0..1). Arah 1 = sisi kiri vektor p1->p2.
+    # Garis hitung (koordinat ternormalisasi 0..1). SATU garis = SATU arah: hanya kendaraan yang lewat searah
+    # panah yang dihitung. Panah menunjuk ke kanan orang yang berjalan dari p1 ke p2 (p1->p2 melintang kiri ke kanan
+    # layar = panah ke bawah). Jalan dua arah memakai dua garis, satu per arah.
     "lines": [
-        {"id": "A", "name": "Garis A", "p1": [0.08, 0.62], "p2": [0.92, 0.62],
-         "dir1": "Mendekat", "dir2": "Menjauh"},
+        {"id": "A", "name": "Garis A", "p1": [0.08, 0.64], "p2": [0.92, 0.64], "dir": "Mendekat", "color": "#ffd400"},
+        {"id": "B", "name": "Garis B", "p1": [0.92, 0.56], "p2": [0.08, 0.56], "dir": "Menjauh", "color": "#ff4fa3"},
     ],
+    "count_outside": True,        # kendaraan yang jelas bergerak tetapi tidak menyentuh garis mana pun tetap dihitung ("Di luar garis")
     # Zona pengamatan (ROI) - kepadatan dihitung di dalam zona ini, deteksi difokuskan ke sini.
     "roi": [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]],
     "calibration": {"m_per_px": None, "ref_px": None, "ref_m": None},
@@ -42,6 +45,34 @@ DEFAULTS: dict = {
     "log_dir": "data",
     "log_events": True,
 }
+
+LINE_COLORS = ["#ffd400", "#ff4fa3", "#7cff4f", "#ff8a00", "#c77dff", "#ffffff"]   # warna garis (zona selalu cyan)
+ZONE_COLOR = "#22d3ee"
+
+
+def normalize_lines(lines: list) -> list:
+    """Rapikan daftar garis: satu arah per garis, warna, id unik. Garis lama dua-arah (dir1/dir2) dipecah jadi dua garis."""
+    out, used = [], set()
+
+    def uid(base):
+        i = str(base or "L")
+        while i in used:
+            i += "'"
+        used.add(i)
+        return i
+    for ln in lines or []:
+        if not isinstance(ln, dict) or "p1" not in ln or "p2" not in ln:
+            continue
+        legacy2 = ln.get("dir2") if "dir" not in ln else None
+        name = ln.get("name") or f"Garis {ln.get('id', len(out) + 1)}"
+        base = {"id": uid(ln.get("id")), "name": name, "p1": list(ln["p1"]), "p2": list(ln["p2"]),
+                "dir": ln.get("dir") or ln.get("dir1") or "Arah", "color": ln.get("color") or LINE_COLORS[len(out) % len(LINE_COLORS)]}
+        out.append(base)
+        if legacy2:                              # versi lama menghitung dua arah: pertahankan dengan garis kebalikan
+            out.append({"id": uid(f"{ln.get('id', 'L')}2"), "name": f"{name} (balik)", "p1": list(ln["p2"]), "p2": list(ln["p1"]),
+                        "dir": legacy2, "color": LINE_COLORS[len(out) % len(LINE_COLORS)]})
+    return out
+
 
 CLASS_LABEL = {"car": "Mobil", "motorbike": "Motor", "bus": "Bus", "truck": "Truk", "bicycle": "Sepeda", "other": "Lainnya"}
 CLASS_COLOR = {  # BGR untuk OpenCV (palet Okabe-Ito, aman bagi buta warna); hex-nya ada di web/app.js
@@ -58,12 +89,15 @@ class Config:
         self._lock = threading.RLock()
         self._data = copy.deepcopy(DEFAULTS)
         self._load()
+        self._data["lines"] = normalize_lines(self._data["lines"])
 
     def _load(self):
         if self.path.exists():
             try:
                 saved = json.loads(self.path.read_text(encoding="utf-8"))
                 self._merge(self._data, saved)
+                if "lines" in saved:
+                    self._data["lines"] = saved["lines"]
             except Exception as exc:  # berkas rusak -> pakai bawaan
                 print(f"[config] gagal membaca {self.path}: {exc}")
 
@@ -90,6 +124,8 @@ class Config:
             for k in ("lines", "roi", "classes"):
                 if k in patch:
                     self._data[k] = copy.deepcopy(patch[k])
+            if "lines" in patch:
+                self._data["lines"] = normalize_lines(self._data["lines"])
             if save:
                 self.save()
             return copy.deepcopy(self._data)

@@ -49,7 +49,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
     log_dir = Path(cfg["log_dir"])
     log_dir = log_dir if log_dir.is_absolute() else ROOT / log_dir
     storage = Storage(log_dir, "emisisense_demo.db" if demo else "emisisense.db")
-    weather = WeatherService(cfg, demo=demo, on_data=None if demo else storage.add_weather)
+    weather = WeatherService(cfg, demo=demo, on_data=None if demo else storage.add_weather, on_wind=storage.upsert_wind)
     analytics = Analytics(cfg, weather_cb=weather.snapshot, storage=storage)
     pipe = Pipeline(cfg, analytics, demo=demo)
     app = Flask(__name__, static_folder=None)
@@ -257,6 +257,14 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
         bucket = 300 if hours <= 3 else 900 if hours <= 12 else 3600 if hours <= 72 else 6 * 3600
         analytics.flush()
         return jsonify({"bucket": bucket, "data": storage.history(hours, bucket)})
+
+    @app.get("/api/windrose")
+    def windrose():
+        try:
+            hours = min(24 * 30, max(1.0, float(request.args.get("hours", 24))))
+        except ValueError:
+            hours = 24.0
+        return jsonify(storage.windrose(hours, cfg["location"]))
 
     def csv_resp(text, name):
         return Response("﻿" + text, mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={name}"})

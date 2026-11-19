@@ -34,7 +34,15 @@ CREATE TABLE IF NOT EXISTS weather(
   ts INTEGER PRIMARY KEY, temp REAL, rh REAL, apparent REAL, rain REAL, code INTEGER, cloud REAL, pressure REAL,
   wind REAL, wind_dir REAL, gust REAL, us_aqi REAL, pm2_5 REAL, pm10 REAL, co REAL, no2 REAL, so2 REAL, o3 REAL,
   lat REAL, lon REAL, location TEXT);
+CREATE TABLE IF NOT EXISTS wind_hourly(
+  ts INTEGER, loc TEXT, speed REAL, dir REAL, gust REAL, PRIMARY KEY(ts, loc));
 """
+
+
+def _compass(deg) -> str:
+    from .wind import compass
+    c = compass(deg)
+    return f"{c['abbr']} ({c['name']})" if c else ""
 
 
 def _iso(ts: float, secs=True) -> str:
@@ -65,6 +73,8 @@ class Storage:
             return {r[1] for r in self._db.execute(f"PRAGMA table_info({t})")}
         if "other" not in cols("minutes"):
             self._db.execute("ALTER TABLE minutes ADD COLUMN other INTEGER DEFAULT 0")
+        if "wind_dir" not in cols("minutes"):
+            self._db.execute("ALTER TABLE minutes ADD COLUMN wind_dir REAL")
         if "via" not in cols("events"):
             self._db.execute("ALTER TABLE events ADD COLUMN via TEXT")
 
@@ -73,6 +83,17 @@ class Storage:
         try:
             with self._lock:
                 self._db.execute(sql, args)
+                self._db.commit()
+            self.last_write = time.time()
+            return True
+        except sqlite3.Error:
+            self.errors += 1
+            return False
+
+    def _exec_many(self, sql: str, rows):
+        try:
+            with self._lock:
+                self._db.executemany(sql, rows)
                 self._db.commit()
             self.last_write = time.time()
             return True
@@ -95,9 +116,9 @@ class Storage:
         total = sum(m.get(c, 0) for c in CLASSES)
         vals += [total, round(m["pcu"], 3), round(m["sp_sum"], 2), m["sp_n"], cur.get("temperature_2m"), cur.get("relative_humidity_2m"),
                  cur.get("precipitation"), cur.get("wind_speed_10m"), aq.get("pm2_5"), aq.get("pm10"), aq.get("carbon_monoxide"),
-                 aq.get("nitrogen_dioxide"), aq.get("us_aqi"), source]
+                 aq.get("nitrogen_dioxide"), aq.get("us_aqi"), source, cur.get("wind_direction_10m")]
         self._exec("INSERT OR REPLACE INTO minutes(minute,car,motorbike,bus,truck,bicycle,other,total,pcu,sp_sum,sp_n,temp,rh,rain,wind,"
-                   "pm2_5,pm10,co,no2,us_aqi,source) VALUES(" + ",".join("?" * 21) + ")", vals)
+                   "pm2_5,pm10,co,no2,us_aqi,source,wind_dir) VALUES(" + ",".join("?" * 22) + ")", vals)
 
     def add_weather(self, data: dict):
         cur, aq, loc = data.get("current") or {}, data.get("air_quality") or {}, data.get("location") or {}
@@ -109,6 +130,28 @@ class Storage:
                     cur.get("wind_speed_10m"), cur.get("wind_direction_10m"), cur.get("wind_gusts_10m"), aq.get("us_aqi"),
                     aq.get("pm2_5"), aq.get("pm10"), aq.get("carbon_monoxide"), aq.get("nitrogen_dioxide"), aq.get("sulphur_dioxide"),
                     aq.get("ozone"), loc.get("lat"), loc.get("lon"), loc.get("name")))
+        if cur.get("wind_speed_10m") is not None and cur.get("wind_direction_10m") is not None and loc.get("lat") is not None:
+            self.upsert_wind([(int(time.time() // 3600 * 3600), cur["wind_speed_10m"], cur["wind_direction_10m"], cur.get("wind_gusts_10m"))], loc)
+
+    # ------------------------------------------------------------ angin
+    @staticmethod
+    def loc_key(loc: dict) -> str:
+        return f"{float(loc['lat']):.2f},{float(loc['lon']):.2f}"
+
+    def upsert_wind(self, rows, loc: dict):
+        """rows: (ts_jam, kecepatan km/jam, arah derajat, hembusan). Satu sampel per jam per lokasi."""
+        key = self.loc_key(loc)
+        self._exec_many("INSERT OR REPLACE INTO wind_hourly(ts,loc,speed,dir,gust) VALUES(?,?,?,?,?)",
+                        [(int(t), key, sp, d, g) for t, sp, d, g in rows if sp is not None and d is not None])
+
+    def windrose(self, hours: float, loc: dict) -> dict:
+        from .wind import windrose
+        t0 = int(time.time() - hours * 3600)
+        with self._lock:
+            rows = self._db.execute("SELECT speed, dir FROM wind_hourly WHERE loc=? AND ts>=?", (self.loc_key(loc), t0)).fetchall()
+        out = windrose([(r["speed"], r["dir"]) for r in rows])
+        out["hours"] = hours
+        return out
 
     # ------------------------------------------------------------ baca
     def stats(self) -> dict:
@@ -164,18 +207,19 @@ class Storage:
         with self._lock:
             rows = self._db.execute("SELECT * FROM minutes WHERE minute>=? AND minute<? ORDER BY minute", (t0 or 0, t1 or 4e9)).fetchall()
         head = ["waktu_menit", *CLASSES, "total", "smp", "kecepatan_rata_kmh", "suhu_c", "rh_persen", "hujan_mm", "angin_kmh",
-                "pm2_5", "pm10", "co", "no2", "us_aqi"]
+                "arah_angin_derajat", "arah_mata_angin", "pm2_5", "pm10", "co", "no2", "us_aqi"]
         return self._csv(head, [(_iso(r["minute"], False), *[r[c] for c in CLASSES], r["total"], r["pcu"],
                                  round(r["sp_sum"] / r["sp_n"], 1) if r["sp_n"] else "", r["temp"], r["rh"], r["rain"], r["wind"],
+                                 r["wind_dir"], _compass(r["wind_dir"]),
                                  r["pm2_5"], r["pm10"], r["co"], r["no2"], r["us_aqi"]) for r in rows])
 
     def weather_csv(self, t0=None, t1=None) -> str:
         with self._lock:
             rows = self._db.execute("SELECT * FROM weather WHERE ts>=? AND ts<? ORDER BY ts", (t0 or 0, t1 or 4e9)).fetchall()
         head = ["waktu", "suhu_c", "rh_persen", "terasa_c", "hujan_mm", "kode_cuaca", "awan_persen", "tekanan_hpa", "angin_kmh",
-                "arah_angin", "hembusan_kmh", "us_aqi", "pm2_5", "pm10", "co", "no2", "so2", "o3", "lat", "lon", "lokasi"]
+                "arah_angin_derajat", "arah_mata_angin", "hembusan_kmh", "us_aqi", "pm2_5", "pm10", "co", "no2", "so2", "o3", "lat", "lon", "lokasi"]
         return self._csv(head, [(_iso(r["ts"], False), *[r[k] for k in ("temp", "rh", "apparent", "rain", "code", "cloud", "pressure", "wind",
-                                 "wind_dir", "gust", "us_aqi", "pm2_5", "pm10", "co", "no2", "so2", "o3", "lat", "lon", "location")]) for r in rows])
+                                 "wind_dir")], _compass(r["wind_dir"]), *[r[k] for k in ("gust", "us_aqi", "pm2_5", "pm10", "co", "no2", "so2", "o3", "lat", "lon", "location")]) for r in rows])
 
     def backup_to(self, dest: Path):
         dst = sqlite3.connect(str(dest))

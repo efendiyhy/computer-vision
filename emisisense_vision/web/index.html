@@ -73,12 +73,17 @@
         <div class="row r-6-6">
           <div class="panel"><div class="panel-head"><h2>Kecepatan</h2><span class="tag" title="Perkiraan dari piksel. Kalibrasi untuk hasil lebih akurat.">estimasi</span></div>
             <div class="stats4" id="speedStats"></div><div class="chart" id="chSpeed"></div></div>
-          <div class="panel"><div class="panel-head"><h2>Arah &amp; garis hitung</h2></div><div id="linesBox"></div></div>
+          <div class="panel"><div class="panel-head"><h2>Garis hitung</h2><span class="tag" title="Satu garis menghitung satu arah: kendaraan yang lewat searah panah">satu arah per garis</span></div><div id="linesBox"></div></div>
         </div>
       </div>
       <div class="readout-col">
         <div class="panel readout" id="readout"></div>
         <div class="panel weather" id="weather"><div class="panel-head"><h2>Cuaca &amp; udara</h2></div><div class="empty">Memuat data cuaca…</div></div>
+        <div class="panel" id="windPanel">
+          <div class="panel-head"><h2>Mawar angin</h2><div class="seg" id="segWind"><button data-h="24" class="on">24 jam</button><button data-h="168">7 hari</button><button data-h="720">30 hari</button></div></div>
+          <div class="windrose" id="windRose"><div class="empty">Memuat data angin…</div></div>
+          <p class="muted small" id="windNote"></p>
+        </div>
       </div>
     </div>
 
@@ -108,6 +113,11 @@
     <div class="row r-6-6">
       <div class="panel"><div class="panel-head"><h2>Kecepatan rata-rata &amp; suhu</h2></div><div class="chart" id="chHistLine"></div></div>
       <div class="panel"><div class="panel-head"><h2>Kualitas udara (PM2,5) &amp; volume</h2></div><div class="chart" id="chHistAir"></div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Mawar angin</h2><span class="muted small" id="histWindRange"></span></div>
+      <div class="wind-wide"><div class="windrose" id="histRose"></div><div id="histWindTbl"></div></div>
+      <p class="muted small">Setiap batang menunjukkan <b>dari arah mana</b> angin datang (angin dari utara bertiup ke selatan) dan seberapa sering. Rentang waktu mengikuti pilihan di bagian atas halaman ini.</p>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Unduh data</h2></div>
