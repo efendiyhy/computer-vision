@@ -58,18 +58,15 @@ WATERMARK = "ek-instrumentation.com"
 
 
 def draw_watermark(img):
-    """Watermark di tengah bawah: bagian dari video (stream, foto, rekaman)."""
+    """Watermark kecil di pojok kanan bawah, latar putih: bagian dari video (tayangan, foto, rekaman)."""
     H, W = img.shape[:2]
-    fs = max(0.45, W / 1800.0 + 0.15)
-    th_ = max(1, int(round(fs * 1.6)))
-    (tw, th), base = cv2.getTextSize(WATERMARK, cv2.FONT_HERSHEY_SIMPLEX, fs, th_)
-    x, y = (W - tw) // 2, H - max(8, int(th * 0.9))
-    pad = int(th * 0.7)
-    x1, y1, x2, y2 = max(0, x - pad * 2), max(0, y - th - pad), min(W, x + tw + pad * 2), min(H, y + base + pad)
-    roi = img[y1:y2, x1:x2]
-    img[y1:y2, x1:x2] = cv2.addWeighted(np.zeros_like(roi), 0.42, roi, 0.58, 0)
-    cv2.putText(img, WATERMARK, (x, y), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), th_ + 2, cv2.LINE_AA)
-    cv2.putText(img, WATERMARK, (x, y), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), th_, cv2.LINE_AA)
+    fs = max(0.32, W / 2600.0 + 0.1)
+    (tw, th), base = cv2.getTextSize(WATERMARK, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+    pad = max(3, int(th * 0.45))
+    x2, y2 = W - 4, H - 4
+    x1, y1 = x2 - tw - 2 * pad, y2 - th - base - 2 * pad + 2
+    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+    cv2.putText(img, WATERMARK, (x1 + pad, y2 - pad - base + 1), cv2.FONT_HERSHEY_SIMPLEX, fs, (40, 40, 40), 1, cv2.LINE_AA)
     return img
 
 

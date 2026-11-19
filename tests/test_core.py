@@ -309,7 +309,7 @@ def test_watermark_is_burned_into_frames():
     from emisisense_vision.pipeline import draw_watermark
     img = np.full((540, 960, 3), 120, np.uint8)
     out = draw_watermark(img.copy())
-    assert (out[480:540, 300:660] != 120).any() and (out[:400] == 120).all()
+    assert (out[520:536, 780:956] == 255).any() and (out[:400] == 120).all() and (out[:, :600] == 120).all()
 
 
 def test_recorder_writes_playable_file(tmp_path):
