@@ -5,18 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>EmisiSense Vision</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23222a31'/%3E%3Cpath d='M4 22h24' stroke='%23f5b800' stroke-width='2.4' stroke-dasharray='5 4'/%3E%3Crect x='9' y='11' width='14' height='7' rx='2' fill='%235b8dff'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="/static/logo.svg">
 <link rel="stylesheet" href="/static/app.css">
-<script>try{var t=localStorage.getItem("ev-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{var t=localStorage.getItem("ev-theme");if(t)document.documentElement.dataset.theme=t;if(localStorage.getItem("ev-rail")==="1")document.documentElement.dataset.rail="min"}catch(e){}</script>
 </head>
 <body>
 <div class="app">
 
 <aside class="rail" aria-label="Navigasi">
   <a class="brand" href="#live" aria-label="EmisiSense Vision">
-    <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><rect width="32" height="32" rx="7" class="b-bg"/><path d="M4 23h24" class="b-lane"/><rect x="9" y="11" width="14" height="7" rx="2" class="b-car"/></svg>
-    <span>EmisiSense<br><b>Vision</b></span>
+    <img src="/static/logo.svg" width="36" height="36" alt="">
+    <span class="wordmark"><b>EmisiSense</b><i>Vision</i></span>
   </a>
+  <button class="rail-toggle" id="railToggle" type="button" aria-label="Kecilkan menu" aria-expanded="true" title="Kecilkan menu"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
   <nav id="nav">
     <a href="#live" data-view="live"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Pemantauan</span></a>
     <a href="#history" data-view="history"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Riwayat</span></a>
@@ -24,7 +25,7 @@
     <a href="#detect" data-view="detect"><svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><rect x="8" y="9" width="8" height="6" rx="1"/></svg><span>Deteksi</span></a>
     <a href="#system" data-view="system"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg><span>Sistem</span><i class="dot-badge" id="updBadge" hidden></i></a>
   </nav>
-  <div class="rail-foot">Dikembangkan oleh<br><b>LAB AQHI</b><br>dan <b>EK Instrumentation</b></div>
+  <div class="rail-foot">Dikembangkan oleh<br><b>LAB AQHI</b><br>dan <b><a class="ek" href="https://ek-instrumentation.com" target="_blank" rel="noopener">EK Instrumentation</a></b></div>
 </aside>
 
 <div class="shell">
@@ -54,6 +55,8 @@
             <button class="btn sm tog" id="tLines">Atur garis</button>
             <button class="btn sm tog" id="tRoi">Atur zona</button>
             <button class="btn sm tog" id="tCal">Kalibrasi</button>
+            <button class="btn sm tog rec" id="tRec" title="Rekam video (lengkap dengan watermark)"><i class="rec-dot"></i><span id="tRecTxt">Rekam</span></button>
+            <button class="btn sm tog" id="tPeople" title="Hitung pejalan kaki (aktif/nonaktif)">Pejalan kaki</button>
             <a class="btn sm" href="/snapshot.jpg" download>Simpan foto</a>
             <button class="btn sm" id="tFull">Layar penuh</button>
           </div>
@@ -62,6 +65,8 @@
           <img id="video" alt="Video kamera dengan hasil deteksi" src="/video">
           <canvas id="overlay"></canvas>
           <div class="chips-overlay" id="liveChip" hidden>Jeda</div>
+          <div class="rec-chip" id="recChip" hidden></div>
+          <a class="wm-link" href="https://ek-instrumentation.com" target="_blank" rel="noopener" title="ek-instrumentation.com" aria-label="ek-instrumentation.com"></a>
         </div>
         <div class="notice" id="notice" hidden></div>
         <div class="editor" id="editor" hidden></div>
@@ -118,6 +123,11 @@
       <div class="panel-head"><h2>Mawar angin</h2><span class="muted small" id="histWindRange"></span></div>
       <div class="wind-wide"><div class="windrose" id="histRose"></div><div id="histWindTbl"></div></div>
       <p class="muted small">Setiap batang menunjukkan <b>dari arah mana</b> angin datang (angin dari utara bertiup ke selatan) dan seberapa sering. Rentang waktu mengikuti pilihan di bagian atas halaman ini.</p>
+    </div>
+    <div class="panel" id="recPanel">
+      <div class="panel-head"><h2>Rekaman video</h2><div class="tools"><label class="check inl"><input type="checkbox" id="recOverlay"> <span>Sertakan kotak, garis, dan zona</span></label><button class="btn sm" id="recToggle2"><i class="rec-dot"></i><span>Mulai rekam</span></button></div></div>
+      <div class="tablewrap"><table id="tblRec"><thead><tr><th>Berkas</th><th>Waktu</th><th class="num">Ukuran</th><th class="num">Tindakan</th></tr></thead><tbody></tbody></table></div>
+      <p class="muted small" id="recNote"></p>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Unduh data</h2></div>
@@ -190,6 +200,7 @@
       <div class="panel">
         <div class="panel-head"><h2>Jenis kendaraan &amp; satuan</h2></div>
         <div class="fld">Jenis yang dideteksi<div class="checks" id="optClasses"></div><small>Truk hanya terdeteksi oleh YOLO.</small></div>
+        <label class="check"><input type="checkbox" id="optPeople"><span><b>Hitung pejalan kaki</b><small>Manusia yang berjalan dihitung dan dicatat terpisah dari kendaraan (tidak masuk jumlah kendaraan maupun SMP). Pengendara motor dan sepeda tidak dihitung sebagai pejalan kaki.</small></span></label>
         <label class="fld">Batas kecepatan (km/jam)<input type="number" id="optLim" min="10" max="120"></label>
         <div class="fld">Bobot SMP per jenis<div class="grid6" id="optPcu"></div></div>
         <div class="fld">Kalibrasi kecepatan<dl class="kv" id="calInfo"></dl>
@@ -226,7 +237,7 @@ Atau pemasang:   jalankan ulang perintah install.sh / install.ps1</pre></details
       <div class="panel"><div class="panel-head"><h2>Penyimpanan data</h2></div><dl class="kv" id="storInfo"></dl>
         <p class="muted small">Kejadian ditulis langsung; agregat menit disimpan tiap beberapa detik dan saat aplikasi berhenti. Mulai ulang pada menit yang sama melanjutkan hitungan.</p></div>
       <div class="panel"><div class="panel-head"><h2>Akses &amp; kredit</h2></div><dl class="kv" id="netInfo"></dl>
-        <p class="credit">Dikembangkan oleh <b>LAB AQHI</b> dan <b>EK Instrumentation</b>.<br><span class="muted small">Universitas Brawijaya · Penelitian EmisiSense (PDU 2026)</span></p></div>
+        <p class="credit">Dikembangkan oleh <b>LAB AQHI</b> dan <b><a class="ek" href="https://ek-instrumentation.com" target="_blank" rel="noopener">EK Instrumentation</a></b>.<br><span class="muted small">Universitas Brawijaya · Penelitian EmisiSense (PDU 2026)</span></p></div>
     </div>
   </section>
   </main>
@@ -236,7 +247,7 @@ Atau pemasang:   jalankan ulang perintah install.sh / install.ps1</pre></details
     <span>Akses jaringan lokal: <b id="footUrls">–</b></span>
     <span>Kecepatan dan SMP adalah perkiraan.</span>
     <span class="grow"></span>
-    <span>Dikembangkan oleh <b>LAB AQHI</b> dan <b>EK Instrumentation</b></span>
+    <span>Dikembangkan oleh <b>LAB AQHI</b> dan <b><a class="ek" href="https://ek-instrumentation.com" target="_blank" rel="noopener">EK Instrumentation</a></b></span>
   </footer>
 </div>
 </div>

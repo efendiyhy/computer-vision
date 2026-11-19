@@ -17,6 +17,7 @@ from werkzeug.utils import secure_filename
 
 from . import __version__
 from .analytics import Analytics
+from .recorder import Recorder
 from .config import CLASS_LABEL, DEFAULT_STREAM_URL, ROOT, Config
 from . import updater
 from .pipeline import Pipeline
@@ -52,6 +53,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
     weather = WeatherService(cfg, demo=demo, on_data=None if demo else storage.add_weather, on_wind=storage.upsert_wind)
     analytics = Analytics(cfg, weather_cb=weather.snapshot, storage=storage)
     pipe = Pipeline(cfg, analytics, demo=demo)
+    recorder = Recorder(log_dir / ("recordings_demo" if demo else "recordings"), pipe.get_record_frame, cfg)
     app = Flask(__name__, static_folder=None)
     app.config["JSON_AS_ASCII"] = False
     app.pipeline, app.analytics, app.weather, app.cfg, app.storage = pipe, analytics, weather, cfg, storage
@@ -62,6 +64,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
 
     def shutdown():
         try:
+            recorder.stop()
             analytics.flush()
             storage.close()
         except Exception:
@@ -102,6 +105,35 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
                 yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
         return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+    @app.get("/api/record")
+    def record_status():
+        return jsonify(recorder.status())
+
+    @app.post("/api/record")
+    def record_ctl():
+        body = request.get_json(force=True, silent=True) or {}
+        if body.get("on"):
+            if "overlay" in body:
+                cfg.update({"record_overlay": bool(body["overlay"])})
+            return jsonify(recorder.start(bool(cfg["record_overlay"])))
+        return jsonify(recorder.stop())
+
+    @app.get("/api/recordings")
+    def recordings():
+        return jsonify({"items": recorder.list(), "status": recorder.status()})
+
+    @app.get("/api/recordings/<name>")
+    def recording_file(name):
+        p = recorder.path_of(name)
+        if not p:
+            return Response(status=404)
+        dl = request.args.get("dl") == "1"
+        return send_file(p, mimetype="video/mp4", as_attachment=dl, download_name=name, conditional=True)
+
+    @app.delete("/api/recordings/<name>")
+    def recording_delete(name):
+        return jsonify({"ok": recorder.delete(name)})
+
     @app.get("/snapshot.jpg")
     def snapshot_jpg():
         _, jpg = pipe.jpeg(-1, 3.0)
@@ -111,7 +143,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
 
     def payload():
         return {"t": time.time(), "status": pipe.get_status(), "stats": analytics.snapshot(), "weather": weather.snapshot(),
-                "version": __version__, "urls": server_urls, "demo": demo}
+                "version": __version__, "urls": server_urls, "demo": demo, "recording": recorder.status()}
 
     @app.get("/api/state")
     def state():

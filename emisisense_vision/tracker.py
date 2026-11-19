@@ -15,7 +15,7 @@ from scipy.optimize import linear_sum_assignment
 from .detector import Detection
 
 _ids = itertools.count(1)
-VEHICLE_FAMILY = {"car": 0, "bus": 0, "truck": 0, "other": 0, "motorbike": 1, "bicycle": 1}
+VEHICLE_FAMILY = {"car": 0, "bus": 0, "truck": 0, "other": 0, "motorbike": 1, "bicycle": 1, "person": 2}
 
 
 class Track:

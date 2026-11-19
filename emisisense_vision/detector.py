@@ -58,6 +58,23 @@ def covered(box, dets, frac=0.55) -> bool:
     return False
 
 
+def drop_riders(people: list[Detection], vehicles: list[Detection]) -> list[Detection]:
+    """Buang "orang" yang sebenarnya pengendara: kotaknya sebagian besar menumpang di kotak motor, sepeda, atau mobil."""
+    out = []
+    for p in people:
+        area = max(1.0, p.w * p.h)
+        rider = False
+        for v in vehicles:
+            ix = max(0.0, min(p.x2, v.x2) - max(p.x1, v.x1)); iy = max(0.0, min(p.y2, v.y2) - max(p.y1, v.y1))
+            frac = ix * iy / area
+            if frac >= (0.3 if v.cls in ("motorbike", "bicycle") else 0.55):
+                rider = True
+                break
+        if not rider:
+            out.append(p)
+    return out
+
+
 def nms(dets: list[Detection], iou_thr: float = 0.5) -> list[Detection]:
     if len(dets) < 2:
         return dets
@@ -199,13 +216,15 @@ class SSDDetector:
                     if covered(b[:4], dets, 0.4) or covered(b[:4], extra_people, 0.4):
                         continue
                     dets.append(Detection(b[0], b[1], b[2], b[3], 0.30, "other", "motion"))
+        if "person" in wanted:
+            walkers = nms([d for d in extra_people if d.w >= max(6, min_box * 0.5) and d.h >= max(8, min_box * 0.7)], 0.45)
+            dets = dets + drop_riders(walkers, dets)
         return dets
-
 
 # --------------------------------------------------------------------------------------------- YOLO (opsional)
 class YOLODetector:
     name = "YOLO"
-    MAP = {"bicycle": "bicycle", "car": "car", "motorcycle": "motorbike", "bus": "bus", "truck": "truck"}
+    MAP = {"bicycle": "bicycle", "car": "car", "motorcycle": "motorbike", "bus": "bus", "truck": "truck", "person": "person"}
 
     def __init__(self, weights: str = "yolov8n.pt"):
         try:
@@ -226,7 +245,9 @@ class YOLODetector:
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0]]
             if x2 - x1 >= min_box and y2 - y1 >= min_box:
                 res.append(Detection(x1, y1, x2, y2, float(b.conf[0]), cls, "yolo"))
-        return nms(res, 0.5)
+        vehicles = [d for d in res if d.cls != "person"]
+        people = drop_riders([d for d in res if d.cls == "person"], vehicles)
+        return nms(vehicles, 0.5) + nms(people, 0.5)
 
 
 def create_detector(kind: str, yolo_model: str = "yolov8n.pt"):

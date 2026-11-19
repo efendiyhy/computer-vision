@@ -4,7 +4,8 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const KEYS = ["car", "motorbike", "bus", "truck", "bicycle", "other"];
-const LABEL = { car: "Mobil", motorbike: "Motor", bus: "Bus", truck: "Truk", bicycle: "Sepeda", other: "Lainnya" };
+const LABEL = { car: "Mobil", motorbike: "Motor", bus: "Bus", truck: "Truk", bicycle: "Sepeda", other: "Lainnya", person: "Pejalan kaki" };
+const ALLK = [...KEYS, "person"];
 const ZONE = "#22d3ee", LINE_COLORS = ["#ffd400", "#ff4fa3", "#7cff4f", "#ff8a00", "#c77dff", "#ffffff"];
 const DEFAULT_SRC = "https://cctvmalang.24hour.id/twentyfourhourid/proxy.php?id=767576969564466612969572";
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -39,7 +40,7 @@ function route() {
   $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view));
   $("#pageTitle").textContent = TITLES[view];
   document.title = TITLES[view] + " · EmisiSense Vision";
-  if (view === "history") { loadHistory(); loadWind(); }
+  if (view === "history") { loadHistory(); loadWind(); loadRecs(); $("#recOverlay").checked = CFG?.record_overlay !== false; }
   if (view === "live") loadWind();
   if (view === "source") initSourceView();
   if (view === "detect") initDetectView();
@@ -219,12 +220,14 @@ function renderNotice(p) {
 
 function renderReadout(s) {
   const lv = s.zone.level_i, lvc = ["--good", "--good", "--warn", "--bad", "--bad"][lv];
+  $("#tPeople").classList.toggle("on", !!s.people.enabled);
   $("#readout").innerHTML = `<div class="big"><div><div class="n">${fmt(s.total)}</div></div><div class="l">kendaraan terhitung<small>sejak ${s.since.slice(11, 16)} · ${fmt(s.this_minute)} menit ini</small></div></div>
   <div class="rd"><span>Laju per jam</span><b>${fmt(s.rate_per_hour)}</b><small>proyeksi dari rata-rata sesi</small></div>
   <div class="rd"><span>Volume SMP</span><b>${fmt(s.pcu_total, 1)}</b><small>satuan mobil penumpang</small></div>
   <div class="rd"><span>Kecepatan rata-rata</span><b>${s.speed.avg == null ? "–" : fmt(s.speed.avg, 0) + " km/j"}</b><small>estimasi · saat ini ${s.speed.now_avg == null ? "–" : fmt(s.speed.now_avg, 0) + " km/j"}</small></div>
   <div class="rd"><span>Di zona sekarang</span><b>${fmt(s.zone.count)}</b><small>puncak ${fmt(s.zone.peak)} kendaraan</small></div>
   <div class="rd"><span>Kepadatan</span><b style="color:var(${lvc})">${s.zone.level}</b><small><span class="lvl" style="--c:var(${lvc});margin:0">${[0, 1, 2, 3, 4].map(i => `<i class="${i <= lv ? "on" : ""}"></i>`).join("")}</span> ${fmt(s.zone.pcu, 1)} SMP di zona (indikatif)</small></div>
+  <div class="rd"><span>Pejalan kaki</span><b>${s.people.enabled ? fmt(s.people.total) : "nonaktif"}</b><small>${s.people.enabled ? `${fmt(s.people.zone)} di zona sekarang · ${fmt(s.people.this_minute)} menit ini` : "deteksi pejalan kaki dimatikan"}</small></div>
   <div class="chips">${KEYS.filter(k => s.zone.by[k]).map(k => `<span><i class="dot" style="background:${colorOf(k)}"></i>${LABEL[k]} ${s.zone.by[k]}</span>`).join("") || '<span class="muted">Zona kosong</span>'}</div>`;
 }
 
@@ -251,7 +254,7 @@ function renderCharts(s) {
   const R = 52, C = 2 * Math.PI * R; let off = 0, arcs = "";
   KEYS.forEach(k => { const v = s.totals[k]; if (!v) return; const len = v / tot * C; arcs += `<circle r="${R}" cx="70" cy="70" fill="none" stroke="${colorOf(k)}" stroke-width="18" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"/>`; off += len; });
   $("#chComp").innerHTML = `<svg viewBox="0 0 140 140" role="img" aria-label="Komposisi jenis"><circle r="${R}" cx="70" cy="70" fill="none" stroke="${css("--line2")}" stroke-width="18"/>${arcs}<text x="70" y="70" text-anchor="middle" style="fill:${css("--ink")};font-size:26px;font-weight:650">${fmt(tot)}</text><text x="70" y="88" text-anchor="middle">kendaraan</text></svg>
-  <ul>${KEYS.map(k => `<li><i class="dot" style="background:${colorOf(k)}"></i>${LABEL[k]}<b>${fmt(s.totals[k])}</b><em>${tot ? Math.round(s.totals[k] / tot * 100) + "%" : ""}</em></li>`).join("")}</ul>`;
+  <ul>${KEYS.map(k => `<li><i class="dot" style="background:${colorOf(k)}"></i>${LABEL[k]}<b>${fmt(s.totals[k])}</b><em>${tot ? Math.round(s.totals[k] / tot * 100) + "%" : ""}</em></li>`).join("")}<li class="sep"><i class="dot" style="background:${colorOf("person")}"></i>Pejalan kaki<b>${s.people.enabled ? fmt(s.people.total) : "–"}</b><em>terpisah</em></li></ul>`;
   const sp = s.speed, W = 360, H = 140, m = { l: 26, r: 6, t: 8, b: 22 }, n = sp.bins.length, bw = (W - m.l - m.r) / n, mx = Math.max(1, ...sp.hist);
   let g = ""; const cols = [];
   sp.hist.forEach((v, i) => { const h = v / mx * (H - m.t - m.b), over = sp.bins[i] >= sp.limit; g += `<rect x="${m.l + i * bw + 2}" y="${H - m.b - h}" width="${bw - 4}" height="${h}" rx="1.5" fill="${over ? css("--bad") : css("--accent")}"/><text x="${m.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${sp.bins[i]}</text>`; cols.push({ x0: m.l + i * bw, x1: m.l + (i + 1) * bw, tip: `<b>${sp.bins[i]}${i === n - 1 ? "+" : "–" + sp.bins[i + 1]} km/jam</b><br>${v} kendaraan` }); });
@@ -264,7 +267,7 @@ function renderZoneLines(s) {
   const mx = Math.max(1, ...s.lines.map(l => l.count));
   $("#linesBox").innerHTML = s.lines.map(l => {
     const col = l.free ? "var(--mute)" : (l.color || "var(--accent)");
-    const chips = KEYS.filter(k => l.by[k]).map(k => `<span><i class="dot" style="background:${colorOf(k)}"></i>${LABEL[k]} ${l.by[k]}</span>`).join("");
+    const chips = ALLK.filter(k => l.by[k]).map(k => `<span><i class="dot" style="background:${colorOf(k)}"></i>${LABEL[k]} ${l.by[k]}</span>`).join("");
     return `<div class="ln"><h3><i class="swatch" style="background:${col}"></i>${esc(l.name)}<small>${l.free ? "bergerak tanpa melewati garis" : "→ " + esc(l.dir)}</small></h3>
     <div class="dir"><span>${l.free ? "Lainnya" : "Dihitung"}</span><div class="bar"><i style="width:${l.count / mx * 100}%;background:${col}"></i></div><b>${l.count}</b></div>${chips ? `<div class="chips">${chips}</div>` : ""}</div>`; }).join("") || '<div class="empty">Belum ada garis. Tekan “Atur garis”.</div>';
 }
@@ -341,9 +344,9 @@ ov.addEventListener("pointerup", () => { if (!drag) return; drag = null; save(mo
 
 /* ============================== popup ==============================
    Popup hanya bisa ditutup dengan tombol X: klik di luar kotak atau tombol Esc tidak menutupnya, supaya isian tidak hilang. */
-function openModal({ title, body, el, okText = "Simpan", danger = false, onOk, onClose }) {
+function openModal({ title, body, el, okText = "Simpan", danger = false, onOk, onClose, wide = false }) {
   const back = document.createElement("div"); back.className = "modal-back";
-  back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2><button class="modal-x" type="button" aria-label="Tutup (X)" title="Tutup">✕</button></div><div class="modal-body"></div>${onOk ? `<div class="modal-foot"><span class="modal-err" role="alert"></span><button class="btn ${danger ? "danger" : "primary"}" type="button">${esc(okText)}</button></div>` : ""}</div>`;
+  back.innerHTML = `<div class="modal${wide ? " wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2><button class="modal-x" type="button" aria-label="Tutup (X)" title="Tutup">✕</button></div><div class="modal-body"></div>${onOk ? `<div class="modal-foot"><span class="modal-err" role="alert"></span><button class="btn ${danger ? "danger" : "primary"}" type="button">${esc(okText)}</button></div>` : ""}</div>`;
   const host = back.querySelector(".modal-body"); let ph = null;
   if (el) { ph = document.createComment("popup"); el.before(ph); el.hidden = false; host.append(el); } else host.innerHTML = body;
   const close = () => { if (el) { el.hidden = true; ph.replaceWith(el); } back.remove(); onClose && onClose(); };
@@ -424,6 +427,7 @@ function renderEditor() {
 async function save(patch) { const r = await api("/api/config", patch); if (!r.error) CFG = r; return r; }
 async function loadCfg() { CFG = await api("/api/config"); }
 
+$("#tPeople").onclick = async () => { const on = CFG.count_people === false; await save({ count_people: on }); $("#tPeople").classList.toggle("on", on); refreshLegend(); toast(on ? "Hitung pejalan kaki: aktif" : "Hitung pejalan kaki: nonaktif"); };
 $("#tLines").onclick = () => setMode("lines"); $("#tRoi").onclick = () => setMode("roi"); $("#tCal").onclick = () => setMode("cal");
 $("#tFull").onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen?.(); };
 $("#tPause").onclick = async () => { const r = await api("/api/pause", { paused: !(S?.status.paused) }); toast(r.paused ? "Pemrosesan dijeda" : "Pemrosesan dilanjutkan"); };
@@ -433,7 +437,7 @@ addEventListener("keydown", e => { if (e.key === "Escape" && mode && !document.q
 document.addEventListener("fullscreenchange", () => setTimeout(fitOverlay, 50));
 
 function refreshLegend() {
-  $("#legend").innerHTML = KEYS.map(k => `<span><i style="background:${colorOf(k)}"></i>${LABEL[k]}</span>`).join("") +
+  $("#legend").innerHTML = (CFG.count_people === false ? KEYS : ALLK).map(k => `<span><i style="background:${colorOf(k)}"></i>${LABEL[k]}</span>`).join("") +
     `<span class="lg-sep"></span><span><i class="sq" style="background:${ZONE}"></i>Zona</span>` + CFG.lines.map(l => `<span><i class="sq" style="background:${l.color}"></i>${esc(l.name)} → ${esc(l.dir)}</span>`).join("");
 }
 function buildLegend() {
@@ -453,7 +457,8 @@ async function loadHistory() {
     const every = Math.max(1, Math.round(d.length / 8));
     stackedBars($("#chHist"), d, { metric: "count", every, label: lab, aria: "Volume kendaraan", extra: x => (x.speed != null ? `<br>kecepatan rata-rata ${fmt(x.speed, 0)} km/j` : "") + (x.temp != null ? `<br>suhu ${fmt(x.temp, 1)}°C` : "") + (x.pm2_5 != null ? `<br>PM2,5 ${fmt(x.pm2_5, 1)} µg/m³` : "") });
     const tot = d.reduce((a, x) => a + KEYS.reduce((b, k) => b + (x[k] || 0), 0), 0), bucket = r.bucket >= 3600 ? r.bucket / 3600 + " jam" : r.bucket / 60 + " menit";
-    $("#histNote").textContent = `${fmt(tot)} kendaraan tercatat pada rentang ini. Satu batang = ${bucket}. Arahkan kursor untuk melihat rincian.`;
+    const ppl = d.reduce((a, x) => a + (x.person || 0), 0);
+    $("#histNote").textContent = `${fmt(tot)} kendaraan${ppl ? ` dan ${fmt(ppl)} pejalan kaki` : ""} tercatat pada rentang ini. Satu batang = ${bucket}. Arahkan kursor untuk melihat rincian.`;
     dualLine($("#chHistLine"), d, { name: "Kecepatan rata-rata", color: css("--accent"), vals: d.map(x => x.speed), unit: "km/j" }, { name: "Suhu", color: css("--c-motorbike"), vals: d.map(x => x.temp), unit: "°C", d: 1, dash: "5 4" }, { label: lab });
     dualLine($("#chHistAir"), d, { name: "PM2,5", color: css("--c-truck"), vals: d.map(x => x.pm2_5), unit: "µg/m³", d: 1 }, { name: "Kendaraan", color: css("--c-bus"), vals: d.map(x => KEYS.reduce((b, k) => b + (x[k] || 0), 0)), unit: "kend." }, { label: lab });
   } catch (e) { /* coba lagi pada siklus berikutnya */ }
@@ -528,6 +533,7 @@ function initDetectView() {
   const rng = (id, out, key, f = v => v) => { const el = $(id); el.value = c[key]; $(out).textContent = f(c[key]); el.oninput = () => { $(out).textContent = f(el.value); queueSave({ [key]: +el.value }); }; };
   rng("#optConf", "#vConf", "confidence", v => fmt(+v, 2)); rng("#optFw", "#vFw", "frame_width", v => v + " px"); rng("#optSf", "#vSf", "stream_fps", v => v + " fps"); rng("#optJq", "#vJq", "jpeg_quality");
   $("#optMotion").checked = c.use_motion; $("#optMotion").onchange = e => queueSave({ use_motion: e.target.checked });
+  $("#optPeople").checked = c.count_people !== false; $("#optPeople").onchange = e => queueSave({ count_people: e.target.checked });
   $("#optOther").checked = c.allow_other; $("#optOther").onchange = e => queueSave({ allow_other: e.target.checked });
   $("#optDet").value = c.detector; $("#optDet").onchange = e => queueSave({ detector: e.target.value });
   $("#optYolo").value = c.yolo_model; $("#optYolo").onchange = e => queueSave({ yolo_model: e.target.value.trim() || "yolov8n.pt" });
@@ -586,9 +592,55 @@ async function applyUpdate() {
 setInterval(() => checkUpdate(false), 30 * 60 * 1000);
 
 /* ============================== siklus render ============================== */
+
+/* ============================== rekam video ============================== */
+const mmss = s => { s = Math.max(0, s | 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60, p = n => String(n).padStart(2, "0"); return (h ? h + ":" : "") + p(m) + ":" + p(x); };
+const bytesTxt = b => b >= 1073741824 ? fmt(b / 1073741824, 2) + " GB" : b >= 1048576 ? fmt(b / 1048576, 1) + " MB" : fmt(b / 1024, 0) + " KB";
+let recOn = false, recMsg = "";
+function renderRec(r) {
+  if (!r) return; const on = !!r.recording;
+  $("#tRec").classList.toggle("on", on); $("#tRecTxt").textContent = on ? "Berhenti " + mmss(r.seconds) : "Rekam";
+  $("#recChip").hidden = !on; if (on) $("#recChip").textContent = "● REC " + mmss(r.seconds) + (r.bytes ? " · " + bytesTxt(r.bytes) : "");
+  $("#recToggle2 span").textContent = on ? "Hentikan rekam " + mmss(r.seconds) : "Mulai rekam";
+  $("#recToggle2").classList.toggle("danger", on);
+  if (r.message && r.message !== recMsg) { recMsg = r.message; toast(r.message); }
+  if (recOn && !on) loadRecs();
+  recOn = on;
+}
+async function toggleRec() {
+  const r = await api("/api/record", { on: !recOn });
+  if (r.message) toast(r.message); else toast(r.recording ? "Mulai merekam" : "Rekaman disimpan");
+  renderRec(r); if (!r.recording) loadRecs();
+}
+async function loadRecs() {
+  if (view !== "history") return;
+  let d; try { d = await api("/api/recordings"); } catch (e) { return; }
+  const rows = d.items;
+  $("#tblRec tbody").innerHTML = rows.map(x => `<tr><td>${esc(x.name)}${x.active ? ' <span class="tag">merekam</span>' : ""}</td><td>${new Date(x.mtime * 1000).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}</td><td class="num">${bytesTxt(x.bytes)}</td><td class="num">${x.active ? "" : `<button class="btn sm" data-rec="play" data-n="${esc(x.name)}">Putar</button><a class="btn sm" href="/api/recordings/${encodeURIComponent(x.name)}?dl=1">Unduh</a><button class="btn sm danger" data-rec="del" data-n="${esc(x.name)}">Hapus</button>`}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Belum ada rekaman. Tekan “Rekam” di halaman Pemantauan.</td></tr>';
+  const st = d.status; $("#recNote").textContent = `Disimpan di folder data (recordings). Sisa ruang disk ${st.free_mb == null ? "–" : fmt(st.free_mb / 1024, 1) + " GB"}. Rekaman dipotong tiap 10 menit dan berhenti otomatis bila disk hampir penuh. Setiap rekaman memuat watermark dan cap waktu.`;
+}
+$("#tblRec").addEventListener("click", e => {
+  const b = e.target.closest("button[data-rec]"); if (!b) return; const n = b.dataset.n;
+  if (b.dataset.rec === "play") openModal({ title: n, wide: true, body: `<video controls autoplay playsinline src="/api/recordings/${encodeURIComponent(n)}"></video><p class="muted small vmsg"></p>`,
+    onClose: () => 0 }).root.querySelector("video").onerror = ev => { const m = ev.target.closest(".modal-body").querySelector(".vmsg"); m.textContent = "Video ini tidak bisa diputar di browser (format MP4V tanpa ffmpeg). Gunakan tombol Unduh lalu putar dengan pemutar video."; };
+  if (b.dataset.rec === "del") openModal({ title: "Hapus rekaman", okText: "Hapus rekaman", danger: true, body: `<p>Hapus <b>${esc(n)}</b>? Berkas ini tidak bisa dikembalikan.</p>`, onOk: async () => { await fetch("/api/recordings/" + encodeURIComponent(n), { method: "DELETE" }); toast("Rekaman dihapus"); loadRecs(); } });
+});
+$("#tRec").onclick = toggleRec; $("#recToggle2").onclick = toggleRec;
+$("#recOverlay").onchange = e => save({ record_overlay: e.target.checked });
+
+/* ============================== menu samping ============================== */
+function setRail(min) {
+  if (min) document.documentElement.dataset.rail = "min"; else delete document.documentElement.dataset.rail;
+  const t = $("#railToggle"); t.setAttribute("aria-expanded", String(!min)); t.title = t.ariaLabel = min ? "Perluas menu" : "Kecilkan menu";
+  try { localStorage.setItem("ev-rail", min ? "1" : "0"); } catch (e) { /* abaikan */ }
+}
+$("#railToggle").onclick = () => setRail(document.documentElement.dataset.rail !== "min");
+$$("#nav a").forEach(a => a.title = a.querySelector("span").textContent);
+setRail(document.documentElement.dataset.rail === "min");
+
 function render() {
   if (!S) return; const p = S;
-  renderStatus(p);
+  renderStatus(p); renderRec(p.recording);
   if (view === "live") { renderCamMeta(p); renderNotice(p); renderReadout(p.stats); renderWeather(p.weather); renderCharts(p.stats); renderZoneLines(p.stats); renderTables(p.stats); drawOverlay(); }
   renderSourceStatus(p); renderSystem(p);
 }

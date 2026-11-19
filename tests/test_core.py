@@ -273,3 +273,58 @@ def test_no_lines_means_no_counting(tmp_path):
     assert cfg["lines"] == []
     frames = [(i / 6, [Detection(300, 80 + i * 10, 380, 130 + i * 10, .9, "car")]) for i in range(30)]
     assert run(make_an(cfg), Tracker(), frames)["total"] == 0
+
+
+def test_riders_are_not_pedestrians():
+    from emisisense_vision.detector import drop_riders
+    bike = Detection(100, 150, 160, 220, .8, "motorbike")
+    rider = Detection(110, 90, 150, 190, .7, "person")          # menumpang di motor
+    walker = Detection(400, 100, 430, 190, .7, "person")
+    kept = drop_riders([rider, walker], [bike])
+    assert kept == [walker]
+
+
+def test_pedestrians_counted_separately(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.update({"lines": [{"id": "A", "name": "Garis A", "dir": "Mendekat", "p1": [0.0, 0.55], "p2": [1.0, 0.55]}]}, save=False)
+    an, tr = make_an(cfg), Tracker()
+    car = [Detection(300, 80 + i * 10, 380, 130 + i * 10, .9, "car") for i in range(30)]
+    man = [Detection(600, 70 + i * 10, 620, 130 + i * 10, .8, "person") for i in range(30)]
+    s = run(an, tr, [(i / 6, [car[i], man[i]]) for i in range(30)])
+    assert s["total"] == 1 and s["people"]["total"] == 1 and s["totals"]["person"] == 1
+    assert s["lines"][0]["count"] == 1 and s["lines"][0]["people"] == 1
+    assert s["speed"]["n"] == 1, "kecepatan pejalan kaki tidak masuk statistik kendaraan"
+
+
+def test_pedestrian_storage_roundtrip(tmp_path):
+    st = Storage(tmp_path / "p")
+    st.upsert_minute({"t": 600, "pcu": 1.0, "sp_sum": 0.0, "sp_n": 0, "car": 2, "person": 5}, {}, "x")
+    m = st.get_minute(600)
+    assert m["person"] == 5 and m["total"] == 2
+    assert "person" in st.minutes_csv().splitlines()[0]
+    assert st.history(24, 3600)[-1].keys() >= {"person"}
+
+
+def test_watermark_is_burned_into_frames():
+    from emisisense_vision.pipeline import draw_watermark
+    img = np.full((540, 960, 3), 120, np.uint8)
+    out = draw_watermark(img.copy())
+    assert (out[480:540, 300:660] != 120).any() and (out[:400] == 120).all()
+
+
+def test_recorder_writes_playable_file(tmp_path):
+    import cv2 as _cv
+    from emisisense_vision.recorder import NAME_RE, Recorder
+    cfg = make_cfg(tmp_path)
+    frame = np.full((240, 320, 3), 90, np.uint8)
+    rec = Recorder(tmp_path / "rec", lambda overlay: frame, cfg)
+    assert rec.start(True)["recording"]
+    time.sleep(2.2)
+    assert rec.stop()["recording"] is False
+    items = rec.list()
+    assert len(items) == 1 and items[0]["bytes"] > 500 and NAME_RE.match(items[0]["name"])
+    cap = _cv.VideoCapture(str(rec.dir / items[0]["name"]))
+    ok, fr = cap.read()
+    assert ok and fr.shape[:2] == (240, 320)
+    assert rec.path_of("../../etc/passwd") is None and not rec.delete("nama-ngawur.mp4")
+    assert rec.delete(items[0]["name"]) and rec.list() == []

@@ -22,7 +22,7 @@ from .config import CLASS_LABEL, Config
 from .storage import Storage
 from .tracker import Track
 
-SIZE_M = {"car": 3.0, "motorbike": 1.5, "bus": 6.0, "truck": 5.0, "bicycle": 1.4, "other": 3.0}   # ukuran khas (akar luas siluet)
+SIZE_M = {"person": 0.5, "car": 3.0, "motorbike": 1.5, "bus": 6.0, "truck": 5.0, "bicycle": 1.4, "other": 3.0}   # ukuran khas (akar luas siluet)
 SPEED_BINS = [0, 10, 20, 30, 40, 50, 60, 70, 80]
 MINUTES_KEPT = 120
 FREE_LINE = {"id": "_free", "name": "Di luar garis", "dir": "Bergerak tanpa melewati garis", "free": True}
@@ -67,6 +67,7 @@ class Analytics:
             self.cur_tracks: list[dict] = []
             self.zone_counts: Counter = Counter()
             self.zone_pcu = 0.0
+            self.zone_people = 0
             self.peak_zone = 0
             self._dirty.clear()
 
@@ -80,7 +81,7 @@ class Analytics:
         pcu_w = cfg["pcu"]
         limit = cfg["speed_limit_kmh"]
         self._count_outside = bool(cfg.get("count_outside", True)) and bool(lines)   # tanpa garis = tanpa perhitungan
-        rows, zone, zone_pcu = [], Counter(), 0.0
+        rows, zone, zone_pcu, zone_ppl = [], Counter(), 0.0, 0
         with self.lock:
             for tr in tracks:
                 if not tr.confirmed:
@@ -92,8 +93,11 @@ class Analytics:
                 self.seen_ids.add(tr.id)
                 fresh = (t - tr.last_t) <= 1.2
                 if inside and fresh:
-                    zone[tr.cls] += 1
-                    zone_pcu += pcu_w.get(tr.cls, 1.0)
+                    if tr.cls == "person":
+                        zone_ppl += 1
+                    else:
+                        zone[tr.cls] += 1
+                        zone_pcu += pcu_w.get(tr.cls, 1.0)
                 if fresh:
                     for ln in lines:
                         self._check_line(tr, ln, W, H, t, limit, pcu_w)
@@ -106,11 +110,13 @@ class Analytics:
             for tr in dead:                         # trek berakhir tanpa pernah menyentuh garis: cadangan "Di luar garis"
                 self._check_motion(tr, t, limit, pcu_w, final=True)
             self.cur_tracks = rows
-            self.zone_counts, self.zone_pcu = zone, zone_pcu
+            self.zone_counts, self.zone_pcu, self.zone_people = zone, zone_pcu, zone_ppl
             self.peak_zone = max(self.peak_zone, sum(zone.values()))
             self._rollover(time.time())
 
     def _update_speed(self, tr: Track, m_per_px):
+        if tr.cls == "person":                     # kecepatan pejalan kaki tidak ditampilkan dan tidak masuk statistik kendaraan
+            return
         pts = [p for p in tr.trail if tr.last_t - p[0] <= 2.5]
         if len(pts) < 2:
             return
@@ -153,7 +159,7 @@ class Analytics:
     def _check_motion(self, tr: Track, t: float, limit: float, pcu_w: dict, final: bool = False):
         if tr.id in self.counted_ids or tr.skip_free or not getattr(self, "_count_outside", True):
             return
-        thr = max(18.0, tr.size * (2.0 if tr.cls == "other" else 1.1))
+        thr = max(18.0, tr.size * (2.0 if tr.cls == "other" else 0.8 if tr.cls == "person" else 1.1))
         need_hits = 5 if tr.cls == "other" else 3
         age = (tr.trail[-1][0] - tr.t0) if tr.trail else 0.0
         enough = tr.displacement >= thr and tr.hits >= need_hits
@@ -246,7 +252,8 @@ class Analytics:
             for v in sp:
                 hist[min(len(SPEED_BINS) - 1, int(v // 10))] += 1
             moving = [t["speed"] for t in self.cur_tracks if t["speed"] and not t["coasting"]]
-            total = sum(self.totals.values())
+            total = sum(v for c, v in self.totals.items() if c != "person")      # jumlah kendaraan; pejalan kaki dipisah
+            people = self.totals.get("person", 0)
             elapsed = max(now - self.t_start, 1.0)
             lvl, lvl_i = density_level(self.zone_pcu)
             lines = []
@@ -258,15 +265,17 @@ class Analytics:
                     continue
                 by = Counter(d1) + Counter(d2)
                 lines.append({"id": ln["id"], "name": ln["name"], "dir": ln.get("dir", "Arah"), "color": ln.get("color"),
-                              "count": sum(by.values()), "by": dict(by), "free": ln["id"] == "_free",
-                              "d1": sum(d1.values()), "d2": sum(d2.values())})
+                              "count": sum(v for k, v in by.items() if k != "person"), "people": by.get("person", 0), "by": dict(by), "free": ln["id"] == "_free",
+                              "d1": sum(v for k, v in d1.items() if k != "person"), "d2": sum(v for k, v in d2.items() if k != "person")})
             return {
                 "totals": {c: self.totals.get(c, 0) for c in CLASS_LABEL}, "total": total,
                 "unique_seen": len(self.seen_ids),
                 "per_minute": series,
-                "this_minute": sum(cm.get(c, 0) for c in CLASS_LABEL) if cm else 0,
+                "this_minute": sum(cm.get(c, 0) for c in CLASS_LABEL if c != "person") if cm else 0,
+                "people": {"total": people, "this_minute": cm.get("person", 0) if cm else 0, "zone": self.zone_people,
+                           "rate_per_hour": round(people / elapsed * 3600), "enabled": bool(cfg.get("count_people", True))},
                 "rate_per_hour": round(total / elapsed * 3600),
-                "pcu_total": round(sum(self.totals.get(c, 0) * cfg["pcu"].get(c, 1.0) for c in CLASS_LABEL), 1),
+                "pcu_total": round(sum(self.totals.get(c, 0) * cfg["pcu"].get(c, 1.0) for c in CLASS_LABEL if c != "person"), 1),
                 "speed": {"avg": round(sum(sp) / len(sp), 1) if sp else None, "max": round(max(sp), 1) if sp else None,
                           "p85": round(float(np.percentile(sp, 85)), 1) if len(sp) >= 5 else None,
                           "now_avg": round(sum(moving) / len(moving), 1) if moving else None,

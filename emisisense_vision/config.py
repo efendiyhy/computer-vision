@@ -40,7 +40,12 @@ DEFAULTS: dict = {
     "roi": [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]],
     "calibration": {"m_per_px": None, "ref_px": None, "ref_m": None},
     "speed_limit_kmh": 50,
-    "pcu": {"car": 1.0, "bus": 1.2, "truck": 1.2, "motorbike": 0.25, "bicycle": 0.2, "other": 1.0},
+    "pcu": {"car": 1.0, "bus": 1.2, "truck": 1.2, "motorbike": 0.25, "bicycle": 0.2, "other": 1.0, "person": 0.0},
+    "record_overlay": True,       # rekaman memuat kotak/garis/zona seperti di layar
+    "record_fps": 12,             # frame/detik pada berkas rekaman
+    "record_segment_min": 10,     # rekaman dipotong tiap sekian menit
+    "record_min_free_mb": 300,    # berhenti merekam bila ruang disk kurang dari ini
+    "count_people": True,          # hitung pejalan kaki (tidak masuk jumlah kendaraan maupun SMP)
     "display": {"boxes": True, "trails": True, "lines": True, "speed": True, "roi": True, "labels": True, "raw": False},
     "log_dir": "data",
     "log_events": True,
@@ -74,10 +79,10 @@ def normalize_lines(lines: list) -> list:
     return out
 
 
-CLASS_LABEL = {"car": "Mobil", "motorbike": "Motor", "bus": "Bus", "truck": "Truk", "bicycle": "Sepeda", "other": "Lainnya"}
+CLASS_LABEL = {"car": "Mobil", "motorbike": "Motor", "bus": "Bus", "truck": "Truk", "bicycle": "Sepeda", "other": "Lainnya", "person": "Pejalan kaki"}
 CLASS_COLOR = {  # BGR untuk OpenCV (palet Okabe-Ito, aman bagi buta warna); hex-nya ada di web/app.js
     "car": (178, 114, 0), "motorbike": (0, 159, 230), "bus": (115, 158, 0),
-    "truck": (0, 94, 213), "bicycle": (167, 121, 204), "other": (145, 134, 122),
+    "truck": (0, 94, 213), "bicycle": (167, 121, 204), "other": (145, 134, 122), "person": (176, 88, 106),
 }
 
 

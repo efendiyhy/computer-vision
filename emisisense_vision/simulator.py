@@ -16,6 +16,7 @@ from .detector import Detection
 SPEC = {  # lebar, tinggi relatif pada y=1 (dekat kamera), kecepatan relatif, bobot kemunculan
     "car": (0.16, 0.13, 1.0, 0.46), "motorbike": (0.07, 0.11, 1.25, 0.34),
     "bus": (0.22, 0.20, 0.8, 0.07), "truck": (0.20, 0.17, 0.85, 0.08), "bicycle": (0.05, 0.10, 0.45, 0.05),
+    "person": (0.028, 0.095, 0.16, 0.10),
 }
 
 
@@ -81,13 +82,13 @@ class TrafficSimulator:
     def step(self, dt: float):
         self.t += dt
         if self.t >= self._next:
-            r, acc = random.random(), 0.0
+            r, acc = random.random() * sum(v[3] for v in SPEC.values()), 0.0
             for cls, (_, _, _, wgt) in SPEC.items():
                 acc += wgt
                 if r <= acc:
                     break
             down = random.random() < 0.5
-            lane = random.choice([0.28, 0.40] if down else [0.60, 0.72])
+            lane = random.choice([0.08, 0.14] if down else [0.86, 0.92]) if cls == "person" else random.choice([0.28, 0.40] if down else [0.60, 0.72])
             self.vehicles.append(SimVehicle(cls, lane, down))
             self._next = self.t + random.uniform(0.35, 1.7)
         for v in self.vehicles:
@@ -100,6 +101,13 @@ class TrafficSimulator:
         for v in sorted(self.vehicles, key=lambda v: v.y):
             x1, y1, x2, y2 = v.box(self.W, self.H)
             col = tuple(int(c * 0.8) for c in CLASS_COLOR[v.cls])
+            if v.cls == "person":          # sosok sederhana: kepala + badan
+                cx, hd = int((x1 + x2) / 2), max(2, int((y2 - y1) * 0.16))
+                cv2.circle(img, (cx, int(y1) + hd), hd, (190, 205, 225), -1)
+                cv2.rectangle(img, (int(x1), int(y1) + 2 * hd), (int(x2), int(y2)), col, -1)
+                if x2 - x1 > 3 and y2 - y1 > 8:
+                    dets.append(Detection(x1 + random.uniform(-1, 1), y1 + random.uniform(-1, 1), x2 + random.uniform(-1, 1), y2 + random.uniform(-1, 1), random.uniform(0.55, 0.95), "person"))
+                continue
             cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), col, -1)
             cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (25, 25, 25), 1)
             wy = int(y1 + (y2 - y1) * 0.25)

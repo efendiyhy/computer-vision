@@ -18,7 +18,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CLASSES = ["car", "motorbike", "bus", "truck", "bicycle", "other"]
+CLASSES = ["car", "motorbike", "bus", "truck", "bicycle", "other", "person"]
+VEHICLE_CLASSES = [c for c in CLASSES if c != "person"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -27,7 +28,7 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts);
 CREATE TABLE IF NOT EXISTS minutes(
   minute INTEGER PRIMARY KEY, car INTEGER DEFAULT 0, motorbike INTEGER DEFAULT 0, bus INTEGER DEFAULT 0,
-  truck INTEGER DEFAULT 0, bicycle INTEGER DEFAULT 0, other INTEGER DEFAULT 0, total INTEGER DEFAULT 0, pcu REAL DEFAULT 0,
+  truck INTEGER DEFAULT 0, bicycle INTEGER DEFAULT 0, other INTEGER DEFAULT 0, person INTEGER DEFAULT 0, total INTEGER DEFAULT 0, pcu REAL DEFAULT 0,
   sp_sum REAL DEFAULT 0, sp_n INTEGER DEFAULT 0,
   temp REAL, rh REAL, rain REAL, wind REAL, pm2_5 REAL, pm10 REAL, co REAL, no2 REAL, us_aqi REAL, source TEXT);
 CREATE TABLE IF NOT EXISTS weather(
@@ -73,6 +74,8 @@ class Storage:
             return {r[1] for r in self._db.execute(f"PRAGMA table_info({t})")}
         if "other" not in cols("minutes"):
             self._db.execute("ALTER TABLE minutes ADD COLUMN other INTEGER DEFAULT 0")
+        if "person" not in cols("minutes"):
+            self._db.execute("ALTER TABLE minutes ADD COLUMN person INTEGER DEFAULT 0")
         if "wind_dir" not in cols("minutes"):
             self._db.execute("ALTER TABLE minutes ADD COLUMN wind_dir REAL")
         if "via" not in cols("events"):
@@ -113,12 +116,12 @@ class Storage:
     def upsert_minute(self, m: dict, wx: dict | None, source: str = ""):
         cur, aq = (wx or {}).get("current") or {}, (wx or {}).get("air_quality") or {}
         vals = [m["t"]] + [m.get(c, 0) for c in CLASSES]
-        total = sum(m.get(c, 0) for c in CLASSES)
+        total = sum(m.get(c, 0) for c in VEHICLE_CLASSES)        # total = kendaraan saja; pejalan kaki di kolom sendiri
         vals += [total, round(m["pcu"], 3), round(m["sp_sum"], 2), m["sp_n"], cur.get("temperature_2m"), cur.get("relative_humidity_2m"),
                  cur.get("precipitation"), cur.get("wind_speed_10m"), aq.get("pm2_5"), aq.get("pm10"), aq.get("carbon_monoxide"),
                  aq.get("nitrogen_dioxide"), aq.get("us_aqi"), source, cur.get("wind_direction_10m")]
-        self._exec("INSERT OR REPLACE INTO minutes(minute,car,motorbike,bus,truck,bicycle,other,total,pcu,sp_sum,sp_n,temp,rh,rain,wind,"
-                   "pm2_5,pm10,co,no2,us_aqi,source,wind_dir) VALUES(" + ",".join("?" * 22) + ")", vals)
+        self._exec("INSERT OR REPLACE INTO minutes(minute,car,motorbike,bus,truck,bicycle,other,person,total,pcu,sp_sum,sp_n,temp,rh,rain,wind,"
+                   "pm2_5,pm10,co,no2,us_aqi,source,wind_dir) VALUES(" + ",".join("?" * 23) + ")", vals)
 
     def add_weather(self, data: dict):
         cur, aq, loc = data.get("current") or {}, data.get("air_quality") or {}, data.get("location") or {}
@@ -174,7 +177,7 @@ class Storage:
         t0 = t1 - int(hours * 3600 // bucket) * bucket
         with self._lock:
             rows = self._db.execute(
-                "SELECT (minute/?)*? b, SUM(car) car, SUM(motorbike) motorbike, SUM(bus) bus, SUM(truck) truck, SUM(bicycle) bicycle, SUM(other) other, "
+                "SELECT (minute/?)*? b, SUM(car) car, SUM(motorbike) motorbike, SUM(bus) bus, SUM(truck) truck, SUM(bicycle) bicycle, SUM(other) other, SUM(person) person, "
                 "SUM(pcu) pcu, SUM(sp_sum) sp_sum, SUM(sp_n) sp_n, AVG(temp) temp, AVG(pm2_5) pm2_5, AVG(us_aqi) aqi "
                 "FROM minutes WHERE minute>=? AND minute<? GROUP BY b", (bucket, bucket, t0, t1)).fetchall()
         by = {r["b"]: r for r in rows}

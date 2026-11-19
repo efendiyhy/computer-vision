@@ -54,6 +54,25 @@ def draw_line_arrows(img, a, b, col, sc=1.0, n=3):
         cv2.polylines(img, [poly], True, (0, 0, 0), max(1, int(1.6 * sc)), cv2.LINE_AA)
 
 
+WATERMARK = "ek-instrumentation.com"
+
+
+def draw_watermark(img):
+    """Watermark di tengah bawah: bagian dari video (stream, foto, rekaman)."""
+    H, W = img.shape[:2]
+    fs = max(0.45, W / 1800.0 + 0.15)
+    th_ = max(1, int(round(fs * 1.6)))
+    (tw, th), base = cv2.getTextSize(WATERMARK, cv2.FONT_HERSHEY_SIMPLEX, fs, th_)
+    x, y = (W - tw) // 2, H - max(8, int(th * 0.9))
+    pad = int(th * 0.7)
+    x1, y1, x2, y2 = max(0, x - pad * 2), max(0, y - th - pad), min(W, x + tw + pad * 2), min(H, y + base + pad)
+    roi = img[y1:y2, x1:x2]
+    img[y1:y2, x1:x2] = cv2.addWeighted(np.zeros_like(roi), 0.42, roi, 0.58, 0)
+    cv2.putText(img, WATERMARK, (x, y), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), th_ + 2, cv2.LINE_AA)
+    cv2.putText(img, WATERMARK, (x, y), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), th_, cv2.LINE_AA)
+    return img
+
+
 def _chip(img, text, org, col, sc=1.0, below=False):
     fs = 0.5 * sc ** 0.5
     (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
@@ -79,6 +98,7 @@ class Pipeline:
         self._view_lock = threading.Lock()
         self._jpeg_cv = threading.Condition()
         self._jpeg, self._jpeg_seq = None, 0
+        self._last_drawn = None
         self.paused = False
         self.t_boot = time.time()
         self.status = {"state": "mulai", "message": "Menyiapkan…", "kind": None, "desc": None, "src_fps": 0.0, "det_fps": 0.0,
@@ -112,6 +132,14 @@ class Pipeline:
         s["uptime_s"] = int(time.time() - self.t_boot)
         s["last_frame_age"] = round(time.time() - s["last_frame_t"], 1) if s["last_frame_t"] else None
         return s
+
+    def get_record_frame(self, overlay: bool = True):
+        """Frame untuk perekam: dengan overlay deteksi (seperti di layar) atau video polos; watermark selalu ada."""
+        if overlay:
+            img = self._last_drawn
+            return None if img is None else img
+        item = self._latest
+        return None if item is None else draw_watermark(item[0].copy())
 
     def jpeg(self, last_seq: int, timeout: float = 5.0):
         with self._jpeg_cv:
@@ -229,7 +257,8 @@ class Pipeline:
                 if self.demo:
                     rng = np.random.default_rng(last_seq)
                     from .detector import Detection
-                    dets = [Detection(d.x1 + rng.normal(0, 1.5), d.y1 + rng.normal(0, 1.5), d.x2 + rng.normal(0, 1.5), d.y2 + rng.normal(0, 1.5), d.conf, d.cls) for d in extra]
+                    dets = [Detection(d.x1 + rng.normal(0, 1.5), d.y1 + rng.normal(0, 1.5), d.x2 + rng.normal(0, 1.5), d.y2 + rng.normal(0, 1.5), d.conf, d.cls) for d in extra
+                            if d.cls != "person" or cfg.get("count_people", True)]
                 else:
                     self._ensure_detector(cfg)
                     if cfg["use_motion"] and getattr(self.detector, "name", "").startswith("MobileNet"):
@@ -237,7 +266,7 @@ class Pipeline:
                     roi_pts = np.array([[p[0] * W, p[1] * H] for p in cfg["roi"]])
                     rx1, ry1 = np.clip(roi_pts.min(0) - 8, 0, [W - 1, H - 1]).astype(int)
                     rx2, ry2 = np.clip(roi_pts.max(0) + 8, 0, [W, H]).astype(int)
-                    dets = self.detector.detect(frame, float(cfg["confidence"]), set(cfg["classes"]), (int(rx1), int(ry1), int(rx2), int(ry2)),
+                    dets = self.detector.detect(frame, float(cfg["confidence"]), set(cfg["classes"]) | ({"person"} if cfg.get("count_people", True) else set()), (int(rx1), int(ry1), int(rx2), int(ry2)),
                                                 int(cfg["min_box_px"]), int(cfg["quality"]), blobs, bool(cfg["allow_other"]))
             except Exception as exc:
                 self.status["message"] = f"Kesalahan deteksi: {type(exc).__name__}: {exc}"
@@ -277,6 +306,7 @@ class Pipeline:
                     item = self._latest            # pakai frame yang paling baru setelah menunggu
             frame, ts, last_seq, _ = item
             img = self._draw(frame, ts, cfg)
+            self._last_drawn = img
             ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(cfg["jpeg_quality"])])
             last_emit = time.time()
             if ok:
@@ -327,10 +357,10 @@ class Pipeline:
                 cv2.rectangle(img, (x1, y1), (x2, y2), col, 2 if tr["counted"] else 1, cv2.LINE_AA)
             if d["labels"]:
                 txt = f"{CLASS_LABEL.get(tr['cls'], tr['cls'])} #{tr['id']}"
-                if d["speed"] and tr["speed"] is not None:
+                if d["speed"] and tr["speed"] is not None and tr["cls"] != "person":
                     txt += f" {tr['speed']:.0f} km/j"
                 (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
                 ty = max(th + 5, y1)
                 cv2.rectangle(img, (x1, ty - th - 6), (x1 + tw + 6, ty), col, -1)
                 cv2.putText(img, txt, (x1 + 3, ty - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
-        return img
+        return draw_watermark(img)
