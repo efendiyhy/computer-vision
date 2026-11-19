@@ -184,7 +184,7 @@ Model MobileNet-SSD mengikuti lisensi sumber aslinya (chuanqi305/MobileNet-SSD).
 
 Aplikasi Android membungkus dashboard web agar terasa seperti aplikasi asli: layar pertama hanya meminta IP, lalu langsung masuk. Navigasi tab di bawah, popup berupa lembar bawah, tarik untuk menyegarkan, layar tetap menyala, unduhan lewat pengelola unduhan, dan tombol Kembali mengikuti riwayat halaman.
 
-- **Unduh APK**: halaman *Releases* di GitHub (tag `android-v*`), atau *Actions → Android APK → Artifacts*.
+- **Unduh APK**: halaman *Releases* di GitHub (rilis `android-latest`, selalu versi terbaru), atau *Actions → Android APK → Artifacts*.
 - **Pasang**: buka berkas APK di ponsel, izinkan pemasangan dari sumber ini. APK ini bertanda tangan debug (belum untuk Play Store).
 - **Pakai**: pastikan ponsel satu jaringan dengan Orange Pi, ketik IP (mis. `192.168.1.20`; port 5000 otomatis), tekan *Hubungkan*. Bila server memakai `--password`, kolom kata sandi akan muncul. Ganti server lewat *Sistem → Akses & kredit → Ganti server*.
 - **Build**: dikerjakan otomatis oleh `.github/workflows/android.yml`. Lokal: `cd android && gradle assembleDebug`.

@@ -46,8 +46,11 @@ jobs:
           path: android/EmisiSenseVision-debug.apk
           if-no-files-found: error
 
-      - name: Publish release (tag android-v*)
-        if: startsWith(github.ref, 'refs/tags/android-v')
+      - name: Publish release (android-latest)
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'android-latest' }}
+          name: EmisiSense Vision Android (debug)
+          target_commitish: ${{ github.sha }}
           files: android/EmisiSenseVision-debug.apk
