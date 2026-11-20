@@ -427,8 +427,9 @@ def test_stale_or_errored_weather_not_attached_offline(tmp_path):
 
 def test_sync_endpoint_demo_and_net_message(tmp_path):
     from emisisense_vision.server import create_app
-    app = create_app(demo=True, config_path=str(Path(tmp_path) / "c.json"))
-    app.cfg.update({"log_dir": str(Path(tmp_path) / "d")}, save=False)
+    cp = Path(tmp_path) / "c.json"
+    cp.write_text(json.dumps({"log_dir": str(Path(tmp_path) / "d")}))
+    app = create_app(demo=True, config_path=str(cp))
     c = app.test_client()
     s = c.get("/api/sync").get_json()
     assert "pending" in s and s["last"] is None
@@ -548,8 +549,9 @@ def test_export_zip_range_parsing_and_keterangan(tmp_path):
 
 def test_ingest_endpoint_bypasses_password_and_exports_are_zip(tmp_path):
     from emisisense_vision.server import create_app
-    app = create_app(demo=False, config_path=str(Path(tmp_path) / "c.json"), password="rahasia")
-    app.cfg.update({"log_dir": str(Path(tmp_path) / "d")}, save=False)
+    cp = Path(tmp_path) / "c.json"
+    cp.write_text(json.dumps({"log_dir": str(Path(tmp_path) / "d")}))        # folder data sementara SEBELUM aplikasi dibuat
+    app = create_app(demo=False, config_path=str(cp), password="rahasia")
     c = app.test_client()
     assert c.get("/api/state").status_code == 401                                     # dashboard tetap dikunci
     r = c.post("/api/ingest", data=json.dumps(_pkt("pm", "z1", _iso(int(time.time())))), content_type="application/json")
