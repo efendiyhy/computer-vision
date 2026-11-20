@@ -354,3 +354,85 @@ def test_net_default_config_is_hotspot_first(monkeypatch, tmp_path):
 def test_net_settime_rejects_nonsense():
     n = _net()
     assert n.cmd_settime("abc") == 2 and n.cmd_settime("100") == 2
+
+
+# ---------------------------------------------------------------- sinkronisasi cuaca (data offline, cuaca menyusul)
+def _fake_getter(now, hours=6):
+    """Tiruan Open-Meteo: data per jam untuk `hours` jam terakhir (waktu UTC, unixtime)."""
+    base = int(now // 3600 * 3600)
+    ts = [base - i * 3600 for i in range(hours, -1, -1)]
+
+    def get(url, params, timeout=10.0):
+        assert params["timeformat"] == "unixtime" and params["timezone"] == "GMT"
+        if "air-quality" in url:
+            return {"hourly": {"time": ts, "pm2_5": [10 + i for i in range(len(ts))], "us_aqi": [50] * len(ts)}}
+        return {"hourly": {"time": ts + [base + 3600], "temperature_2m": [20.0 + i for i in range(len(ts) + 1)],
+                           "wind_speed_10m": [5.0] * (len(ts) + 1), "wind_direction_10m": [90.0] * (len(ts) + 1)}}
+    return get
+
+
+def test_fetch_hourly_drops_future_and_merges_air():
+    from emisisense_vision.weather import fetch_hourly
+    now = 1_800_000_000.0
+    out, warns = fetch_hourly({"lat": -7.9, "lon": 112.6}, now - 4 * 3600, now, getter=_fake_getter(now))
+    assert max(out) <= now and not warns
+    h = out[max(out)]
+    assert h["temperature_2m"] and h["pm2_5"] and h["us_aqi"] == 50
+
+
+def test_fetch_hourly_survives_air_failure_and_warns_when_too_old():
+    from emisisense_vision.weather import fetch_hourly
+    now = 1_800_000_000.0
+    base = _fake_getter(now)
+
+    def flaky(url, params, timeout=10.0):
+        if "air-quality" in url:
+            raise OSError("down")
+        return base(url, params, timeout)
+    out, warns = fetch_hourly({"lat": 0, "lon": 0}, now - 120 * 86400, now, getter=flaky)
+    assert out and any("Kualitas udara" in w for w in warns) and any("92" in w for w in warns)
+
+
+def test_backfill_fills_only_empty_minutes_and_is_idempotent(tmp_path):
+    cfg = make_cfg(tmp_path)
+    st = Storage(Path(cfg["log_dir"]))
+    now = time.time()
+    h0 = int(now // 3600 * 3600) - 3600                      # jam penuh yang sudah lewat
+    base = {"car": 1, "motorbike": 0, "bus": 0, "truck": 0, "bicycle": 0, "other": 0, "person": 0, "pcu": 1.0, "sp_sum": 0, "sp_n": 0}
+    st.upsert_minute({**base, "t": h0 + 60}, None)           # direkam offline: tanpa cuaca
+    st.upsert_minute({**base, "t": h0 + 120}, None)
+    st.upsert_minute({**base, "t": h0 + 180}, {"current": {"temperature_2m": 33.3, "wind_speed_10m": 2.0}, "air_quality": {}})   # sudah punya cuaca nyata
+    assert st.wx_pending()["minutes"] == 2 and st.stats()["wx_pending"] == 2
+    hourly = {h0: {"temperature_2m": 25.0, "relative_humidity_2m": 80, "wind_speed_10m": 7.0, "wind_direction_10m": 120.0, "pm2_5": 12.0}}
+    loc = {"lat": -7.9, "lon": 112.6, "name": "Uji"}
+    r = st.backfill_weather(hourly, loc)
+    assert r == {"minutes_filled": 2, "hours_used": 1}
+    assert st.wx_pending()["minutes"] == 0
+    assert st.get_minute(h0 + 60)["temp"] == 25.0 and st.get_minute(h0 + 60)["wx_sync"] == 1
+    assert st.get_minute(h0 + 180)["temp"] == 33.3 and not st.get_minute(h0 + 180)["wx_sync"]     # data nyata tidak ditimpa
+    assert st.backfill_weather(hourly, loc)["minutes_filled"] == 0                              # aman diulang
+    assert "cuaca_sinkron" in st.minutes_csv().splitlines()[0]
+
+
+def test_stale_or_errored_weather_not_attached_offline(tmp_path):
+    from emisisense_vision.analytics import _wx_fresh
+    from datetime import datetime, timedelta
+    ok = {"current": {"temperature_2m": 1}, "updated": datetime.now().astimezone().isoformat(timespec="seconds")}
+    assert _wx_fresh(ok)
+    assert not _wx_fresh({**ok, "error": "URLError"})
+    assert not _wx_fresh({**ok, "updated": (datetime.now().astimezone() - timedelta(hours=2)).isoformat(timespec="seconds")})
+    assert not _wx_fresh({}) and not _wx_fresh({"current": {}})
+
+
+def test_sync_endpoint_demo_and_net_message(tmp_path):
+    from emisisense_vision.server import create_app
+    app = create_app(demo=True, config_path=str(Path(tmp_path) / "c.json"))
+    app.cfg.update({"log_dir": str(Path(tmp_path) / "d")}, save=False)
+    c = app.test_client()
+    s = c.get("/api/sync").get_json()
+    assert "pending" in s and s["last"] is None
+    r = c.post("/api/sync").get_json()
+    assert r["ok"] and "message" in r and r["pending_after"] <= r["pending_before"]
+    assert c.get("/api/sync").get_json()["last"]["ok"]
+    n = c.get("/api/net").get_json()
+    assert n["available"] is False and n["message"]

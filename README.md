@@ -206,6 +206,16 @@ cd ~/emisisense-vision && git pull && sudo ./hotspot/install-hotspot.sh
 - Aplikasi Android: tombol “Pakai hotspot Orange Pi” mengisi 10.42.0.1 dan mengikat aplikasi ke Wi-Fi agar tidak dialihkan ke data seluler.
 - CLI: `sudo emisisense-net status|scan|hotspot|boot`, `echo '{"ssid":"NAMA","password":"SANDI"}' | sudo emisisense-net connect`.
 
+## Sinkronisasi cuaca (data direkam offline)
+
+Bila kendaraan direkam tanpa internet, kolom cuaca dan kualitas udara pada catatan menit dibiarkan kosong (tidak diisi nilai lama).
+Setelah Orange Pi online, tekan tombol **Sinkronisasi** di bagian atas dashboard: data per jam Open-Meteo (suhu, kelembapan, hujan, angin,
+PM2,5, dll.) diunduh dan diisikan ke menit yang masih kosong; data waktu nyata tidak ditimpa. Batas riwayat Open-Meteo lewat `past_days` adalah 92 hari.
+Menit yang diisi lewat sinkronisasi ditandai `cuaca_sinkron=1` pada ekspor CSV. API: `GET /api/sync` (status), `POST /api/sync` (jalankan).
+
+Panel **Jaringan Orange Pi** di halaman Sistem selalu tampil; bila pengatur jaringan belum terpasang, panel menampilkan perintah pemasangan
+(`sudo ./hotspot/install-hotspot.sh`). `./update.sh` juga mengingatkan bila pengatur ini belum terpasang.
+
 ## Memakai video untuk program lain
 
 Kamera hanya bisa dibuka satu program. Biarkan dashboard memegang kamera, lalu program lain membaca videonya lewat jaringan (tanpa garis/kotak/watermark):

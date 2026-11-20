@@ -35,6 +35,7 @@ if(/EmisiSenseApp/.test(navigator.userAgent))document.documentElement.classList.
     <div class="top-title"><h1 id="pageTitle">Pemantauan</h1><span class="where" id="whereTxt"></span></div>
     <div class="top-tools">
       <span class="status" id="status" data-s="wait"><i></i><b id="statusTxt">Menghubungkan</b><small id="statusSub"></small></span>
+      <button class="btn sm sync" id="syncBtn" type="button" title="Ambil data cuaca Open-Meteo untuk data yang direkam saat offline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3M18 3v4h-4M6 21v-4h4"/></svg><span>Sinkronisasi</span><b class="badge" id="syncBadge" hidden></b></button>
       <time id="clock" class="clock">--:--:--</time>
       <button class="icon-btn" id="themeBtn" title="Ganti tema" aria-label="Ganti tema"><svg viewBox="0 0 24 24"><path d="M21 13a8 8 0 1 1-10-10 6.5 6.5 0 0 0 10 10z"/></svg></button>
     </div>
@@ -264,10 +265,13 @@ Tanpa terminal: halaman Riwayat, bagian Unduh data dan Rekaman video."></pre></d
       <div class="panel"><div class="panel-head"><h2>Video untuk program lain</h2></div>
         <p class="muted small">Kamera hanya bisa dibuka satu program. Program tambahan Anda cukup membaca alamat di bawah (kamera tetap dipegang dashboard), tanpa garis/kotak/watermark.</p>
         <dl class="kv" id="vidInfo"></dl></div>
-      <div class="panel" id="netPanel" hidden><div class="panel-head"><h2>Jaringan Orange Pi</h2><button class="btn sm" id="netScan" type="button">Cari Wi-Fi</button></div>
-        <dl class="kv" id="netState"></dl><div id="netList" class="netlist"></div>
+      <div class="panel" id="syncPanel"><div class="panel-head"><h2>Sinkronisasi cuaca</h2></div>
+        <dl class="kv" id="syncInfo"></dl>
+        <p class="muted small">Saat merekam kendaraan tanpa internet, cuaca dan kualitas udara belum bisa diambil. Setelah Orange Pi online, tekan <b>Sinkronisasi</b> (di bagian atas): data Open-Meteo per jam diunduh dan diisikan ke menit yang masih kosong. Data waktu nyata yang sudah ada tidak ditimpa.</p></div>
+      <div class="panel" id="netPanel"><div class="panel-head"><h2>Jaringan Orange Pi</h2><button class="btn sm" id="netScan" type="button">Cari Wi-Fi</button></div>
+        <dl class="kv" id="netState"></dl><div id="netUnavail" class="notice" hidden></div><div id="netControls"><div id="netList" class="netlist"></div>
         <div class="tools gap"><button class="btn" id="netHotspot" type="button">Gunakan hotspot Orange Pi</button><button class="btn" id="netManual" type="button">Wi-Fi lain (ketik nama)</button></div>
-        <p class="muted small">Orange Pi menyalakan hotspotnya sendiri saat boot. Pilih Wi-Fi lain bila ingin memakai jaringan yang ada; bila gagal tersambung, hotspot otomatis menyala kembali.</p></div>
+        <p class="muted small">Orange Pi menyalakan hotspotnya sendiri saat boot. Pilih Wi-Fi lain bila ingin memakai jaringan yang ada; bila gagal tersambung, hotspot otomatis menyala kembali.</p></div></div>
       <div class="panel"><div class="panel-head"><h2>Akses &amp; kredit</h2></div><dl class="kv" id="netInfo"></dl>
         <p class="credit">Dikembangkan oleh <b>LAB AQHI</b> dan <b><a class="ek" href="https://ek-instrumentation.com" target="_blank" rel="noopener">EK Instrumentation</a></b>.<br><span class="muted small">Universitas Brawijaya · Penelitian EmisiSense (PDU 2026)</span></p></div>
     </div>

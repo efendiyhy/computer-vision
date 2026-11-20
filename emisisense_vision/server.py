@@ -25,7 +25,7 @@ from . import updater
 from .pipeline import Pipeline
 from .reader import test_source as probe_source
 from .storage import Storage
-from .weather import WeatherService, _get_json
+from .weather import WeatherService, _get_json, fetch_hourly
 
 WEB = Path(__file__).resolve().parent / "web"
 VIDEO_EXT = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".m4v"}
@@ -332,12 +332,66 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
             updater.restart_soon(app.shutdown)
         return jsonify(res)
 
+    # ---------------------------------------------------------------- sinkronisasi cuaca (Open-Meteo)
+    sync_lock = threading.Lock()
+    sync_last: dict = {}
+
+    def _demo_hourly(t0):
+        from .weather import demo_weather
+        out, h = {}, int(t0 // 3600 * 3600)
+        while h <= time.time():
+            c = demo_weather(cfg["location"])
+            out[h] = {**c["current"], **c["air_quality"], "relative_humidity_2m": 70}
+            h += 3600
+        return out, []
+
+    @app.get("/api/sync")
+    def sync_status():
+        p = storage.wx_pending()
+        return jsonify({"pending": p, "last": sync_last or None, "busy": sync_lock.locked(),
+                        "online_weather": bool(weather.snapshot().get("current")) and not weather.snapshot().get("error")})
+
+    @app.post("/api/sync")
+    def sync_run():
+        """Ambil data Open-Meteo untuk menit yang direkam saat offline lalu isi ke database (per jam). Aman diulang."""
+        if not sync_lock.acquire(blocking=False):
+            return jsonify({"ok": False, "message": "Sinkronisasi sedang berjalan"}), 409
+        try:
+            analytics.flush()
+            loc, pend = dict(cfg["location"]), storage.wx_pending()
+            res = {"ok": True, "pending_before": pend["minutes"], "minutes_filled": 0, "hours_used": 0, "warnings": []}
+            try:
+                if pend["minutes"]:
+                    hourly, warns = _demo_hourly(pend["first"]) if demo else fetch_hourly(loc, pend["first"])
+                    res["warnings"] = warns
+                    if not hourly:
+                        raise RuntimeError("Open-Meteo tidak mengirim data")
+                    res.update(storage.backfill_weather(hourly, loc))
+                weather.refresh()                      # cuaca saat ini + riwayat angin ikut diperbarui
+            except Exception as exc:
+                res.update(ok=False, message="Tidak dapat mengambil data Open-Meteo. Pastikan Orange Pi terhubung ke internet, lalu coba lagi.",
+                           detail=f"{type(exc).__name__}: {exc}"[:200])
+            left = storage.wx_pending()
+            res["pending_after"] = left["minutes"]
+            if res["ok"]:
+                res["message"] = ("Semua data sudah memiliki cuaca." if not pend["minutes"] else
+                                  f"Cuaca terisi untuk {res['minutes_filled']} menit ({res['hours_used']} jam)." +
+                                  (f" {left['minutes']} menit belum terisi (jam terbaru, tersedia nanti)." if left["minutes"] else ""))
+            res["time"] = datetime.now().astimezone().isoformat(timespec="seconds")
+            sync_last.clear(); sync_last.update(res)
+            return jsonify(res), (200 if res["ok"] else 502)
+        finally:
+            sync_lock.release()
+
     # ---------------------------------------------------------------- jaringan (hotspot / Wi-Fi Orange Pi)
     @app.get("/api/net")
     def net_status():
         res = _net_run(["status"], timeout=15)
-        if res is None or res.get("available") is False:
-            return jsonify({"available": False})
+        if res is None:
+            why = "Hanya tersedia di Orange Pi/Linux." if os.name != "posix" else "Pengatur jaringan belum terpasang di perangkat ini."
+            return jsonify({"available": False, "installed": False, "message": why})
+        if res.get("available") is False:
+            return jsonify({"available": False, "installed": True, "message": res.get("message") or "Adaptor atau NetworkManager tidak tersedia."})
         return jsonify(res)
 
     @app.get("/api/net/scan")

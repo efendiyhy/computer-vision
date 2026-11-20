@@ -40,6 +40,16 @@ def density_level(pcu: float) -> tuple[str, int]:
     return "Sangat padat", 4
 
 
+def _wx_fresh(wx: dict, max_age: float = 20 * 60) -> bool:
+    """Cuaca layak ditempel ke catatan menit bila ada, tidak sedang error, dan baru diperbarui."""
+    if not wx or not wx.get("current") or wx.get("error"):
+        return False
+    try:
+        return time.time() - datetime.fromisoformat(wx["updated"]).timestamp() <= max_age
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
 class Analytics:
     def __init__(self, cfg: Config, weather_cb=None, storage: Storage | None = None):
         self.cfg = cfg
@@ -230,6 +240,8 @@ class Analytics:
                 self._dirty.clear()
                 return
             wx = self.weather_cb() if self.weather_cb else {}
+            if not _wx_fresh(wx):
+                wx = {}              # offline/data basi: kosongkan agar tidak ada cuaca lama yang menempel; diisi lewat Sinkronisasi
             src = self.cfg["source"]
             for k in sorted(self._dirty):
                 if k in self.minutes:

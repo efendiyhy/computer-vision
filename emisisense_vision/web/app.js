@@ -21,7 +21,7 @@ async function api(u, body) {
   try { return await r.json(); } catch { return {}; }
 }
 let toastT;
-function toast(t) { const e = $("#toast"); e.textContent = t; e.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => e.hidden = true, 2600); }
+function toast(t, ms = 2600) { const e = $("#toast"); e.textContent = t; e.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => e.hidden = true, ms); }
 function setRes(sel, cls, txt) { const e = $(sel); e.className = "result " + cls; e.textContent = txt; }
 
 let S = null, CFG = null, view = "live", metric = "count";
@@ -680,14 +680,42 @@ syncClock(); setInterval(syncClock, 600000);
   $("#vidInfo").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="selectable" style="word-break:break-all">${esc(v)}</dd>`).join("");
 }
 
+// ---- Sinkronisasi cuaca (Open-Meteo) untuk data yang direkam saat offline
+let syncState = null;
+function syncRender() {
+  const s = syncState, n = s?.pending?.minutes || 0, b = $("#syncBadge");
+  b.hidden = !n; b.textContent = n > 99 ? "99+" : n;
+  $("#syncBtn").title = n ? `${n} menit data belum punya cuaca. Tekan untuk mengambil dari Open-Meteo.` : "Ambil data cuaca Open-Meteo untuk data yang direkam saat offline";
+  const l = s?.last, f = t => t ? t.replace("T", " ").slice(0, 16) : "–";
+  const rows = [["Menit tanpa cuaca", n ? `${fmt(n)} menit (${f(isoOf(s.pending.first))} s.d. ${f(isoOf(s.pending.last))})` : "Tidak ada"],
+    ["Cuaca saat ini", s?.online_weather ? "Tersambung ke Open-Meteo" : "Belum tersambung (offline)"],
+    ["Sinkronisasi terakhir", l ? `${f(l.time)} · ${l.ok ? esc2(l.message) : "gagal"}` : "Belum pernah"]];
+  $("#syncInfo").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+}
+const esc2 = t => esc(t || "");
+const isoOf = t => t ? new Date(t * 1000 - new Date().getTimezoneOffset() * 60000).toISOString() : null;
+async function syncLoad() {
+  try { syncState = await (await fetch("/api/sync", { cache: "no-store" })).json(); syncRender(); } catch (e) { /* server belum siap */ }
+}
+$("#syncBtn").onclick = async () => {
+  const btn = $("#syncBtn"); btn.classList.add("busy"); toast("Menyinkronkan data cuaca…", 30000);
+  let r;
+  try { r = await (await fetch("/api/sync", { method: "POST" })).json(); } catch (e) { r = { ok: false, message: "Tidak dapat menghubungi server." }; }
+  btn.classList.remove("busy"); await syncLoad();
+  if (r.ok) toast(r.message, 5000);
+  else { $("#toast").hidden = true; openModal({ title: "Sinkronisasi gagal", okText: "Tutup", body: `<p>${esc2(r.message)}</p>${r.detail ? `<p class="muted small selectable">${esc2(r.detail)}</p>` : ""}` }); }
+  if (r.ok && r.warnings && r.warnings.length) setTimeout(() => toast(r.warnings.join(" · "), 6000), 5200);
+};
+syncLoad(); setInterval(() => { if (!document.hidden) syncLoad(); }, 20000);
+
 // ---- Jaringan Orange Pi: hotspot atau Wi-Fi pilihan
 let netPoll = null;
 async function netLoad() {
   let r = null;
   try { r = await (await fetch("/api/net", { cache: "no-store" })).json(); } catch (e) { return null; }
   const panel = $("#netPanel");
-  if (!r || !r.available) { panel.hidden = true; return null; }
-  panel.hidden = false;
+  if (!r || !r.available) { netUnavailable(r); return null; }
+  panel.hidden = false; $("#netUnavail").hidden = true; $("#netControls").hidden = false; $("#netScan").hidden = false;
   const port = location.port ? ":" + location.port : "";
   const modeTxt = { hotspot: "Hotspot Orange Pi", wifi: "Tersambung ke Wi-Fi", disconnected: "Belum tersambung", "no-wifi": "Adaptor Wi-Fi tidak ditemukan" }[r.state] || r.state;
   const rows = [["Mode", modeTxt], ["Nama jaringan", r.ssid || "–"], ["Alamat IP", r.ip || "–"], ["Alamat web", r.ip ? `http://${r.ip}${port}` : "–"]];
@@ -698,6 +726,11 @@ async function netLoad() {
   if (l && l.state === "connecting") rows.push(["Sedang berpindah", l.target === "hotspot" ? "ke hotspot…" : `ke ${l.ssid}…`]);
   $("#netState").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="selectable">${esc(v)}</dd>`).join("");
   return r;
+}
+function netUnavailable(r) {
+  $("#netPanel").hidden = false; $("#netControls").hidden = true; $("#netScan").hidden = true; $("#netState").innerHTML = ""; $("#netUnavail").hidden = false;
+  const m = r && r.message ? esc(r.message) : "Tidak dapat memeriksa jaringan.";
+  $("#netUnavail").innerHTML = `<p>${m}</p>` + (r && r.installed === false ? `<p class="muted small">Pasang sekali lewat SSH di Orange Pi (akan menyalakan hotspot sendiri saat boot):</p><pre class="cmd selectable">cd ~/emisisense-vision && ./update.sh && sudo ./hotspot/install-hotspot.sh</pre>` : "");
 }
 function netWatch() { // setelah pindah jaringan koneksi putus sebentar; pantau sampai server kembali
   clearInterval(netPoll); let n = 0;

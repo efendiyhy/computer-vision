@@ -78,6 +78,8 @@ class Storage:
             self._db.execute("ALTER TABLE minutes ADD COLUMN person INTEGER DEFAULT 0")
         if "wind_dir" not in cols("minutes"):
             self._db.execute("ALTER TABLE minutes ADD COLUMN wind_dir REAL")
+        if "wx_sync" not in cols("minutes"):
+            self._db.execute("ALTER TABLE minutes ADD COLUMN wx_sync INTEGER DEFAULT 0")   # 1 = cuaca diisi belakangan lewat sinkronisasi (per jam)
         if "via" not in cols("events"):
             self._db.execute("ALTER TABLE events ADD COLUMN via TEXT")
 
@@ -136,6 +138,45 @@ class Storage:
         if cur.get("wind_speed_10m") is not None and cur.get("wind_direction_10m") is not None and loc.get("lat") is not None:
             self.upsert_wind([(int(time.time() // 3600 * 3600), cur["wind_speed_10m"], cur["wind_direction_10m"], cur.get("wind_gusts_10m"))], loc)
 
+    # ------------------------------------------------------------ sinkronisasi cuaca (data diambil offline, cuaca menyusul)
+    NO_WX = "temp IS NULL AND rh IS NULL AND wind IS NULL AND pm2_5 IS NULL AND us_aqi IS NULL"
+
+    def wx_pending(self) -> dict:
+        """Jumlah menit yang sudah tercatat tetapi belum punya data cuaca, beserta rentang waktunya."""
+        with self._lock:
+            r = self._db.execute(f"SELECT COUNT(*) n, MIN(minute) a, MAX(minute) b FROM minutes WHERE {self.NO_WX}").fetchone()
+        return {"minutes": r["n"], "first": r["a"], "last": r["b"]}
+
+    def backfill_weather(self, hourly: dict, loc: dict) -> dict:
+        """hourly: {ts_jam: {kunci: nilai}} dari Open-Meteo. Mengisi menit yang kosong dengan nilai jam tersebut
+        (tidak menimpa data waktu nyata), menambah rekaman cuaca per jam, dan riwayat angin."""
+        filled = hours_used = 0
+        with self._lock:
+            try:
+                for ts in sorted(hourly):
+                    h = hourly[ts]
+                    cur = self._db.execute(
+                        f"UPDATE minutes SET temp=?, rh=?, rain=?, wind=?, wind_dir=?, pm2_5=?, pm10=?, co=?, no2=?, us_aqi=?, wx_sync=1 "
+                        f"WHERE minute>=? AND minute<? AND {self.NO_WX}",
+                        (h.get("temperature_2m"), h.get("relative_humidity_2m"), h.get("precipitation"), h.get("wind_speed_10m"),
+                         h.get("wind_direction_10m"), h.get("pm2_5"), h.get("pm10"), h.get("carbon_monoxide"), h.get("nitrogen_dioxide"),
+                         h.get("us_aqi"), ts, ts + 3600))
+                    if cur.rowcount:
+                        filled += cur.rowcount; hours_used += 1
+                        if not self._db.execute("SELECT 1 FROM weather WHERE ts>=? AND ts<?", (ts, ts + 3600)).fetchone():
+                            self._db.execute("INSERT OR IGNORE INTO weather VALUES(" + ",".join("?" * 21) + ")",
+                                (ts, h.get("temperature_2m"), h.get("relative_humidity_2m"), h.get("apparent_temperature"), h.get("precipitation"),
+                                 h.get("weather_code"), h.get("cloud_cover"), h.get("pressure_msl"), h.get("wind_speed_10m"),
+                                 h.get("wind_direction_10m"), h.get("wind_gusts_10m"), h.get("us_aqi"), h.get("pm2_5"), h.get("pm10"),
+                                 h.get("carbon_monoxide"), h.get("nitrogen_dioxide"), h.get("sulphur_dioxide"), h.get("ozone"),
+                                 loc.get("lat"), loc.get("lon"), loc.get("name")))
+                self._db.commit()
+            except sqlite3.Error:
+                self._db.rollback(); self.errors += 1
+                raise
+        self._stats_cache = (0.0, {})
+        return {"minutes_filled": filled, "hours_used": hours_used}
+
     # ------------------------------------------------------------ angin
     @staticmethod
     def loc_key(loc: dict) -> str:
@@ -166,7 +207,7 @@ class Storage:
             mi = self._db.execute("SELECT COUNT(*) n, MIN(minute) a, MAX(minute) b FROM minutes").fetchone()
             we = self._db.execute("SELECT COUNT(*) n FROM weather").fetchone()
         size = sum(p.stat().st_size for p in self.dir.glob(self.path.name + "*") if p.exists())
-        s = {"path": str(self.path), "events": ev["n"], "minutes": mi["n"], "weather": we["n"], "size_kb": round(size / 1024, 1),
+        s = {"path": str(self.path), "wx_pending": self.wx_pending()["minutes"], "events": ev["n"], "minutes": mi["n"], "weather": we["n"], "size_kb": round(size / 1024, 1),
              "first": _iso(min(x for x in (ev["a"], mi["a"]) if x)) if (ev["a"] or mi["a"]) else None,
              "last": _iso(max(x for x in (ev["b"], mi["b"]) if x)) if (ev["b"] or mi["b"]) else None}
         self._stats_cache = (now, s)
@@ -210,11 +251,11 @@ class Storage:
         with self._lock:
             rows = self._db.execute("SELECT * FROM minutes WHERE minute>=? AND minute<? ORDER BY minute", (t0 or 0, t1 or 4e9)).fetchall()
         head = ["waktu_menit", *CLASSES, "total", "smp", "kecepatan_rata_kmh", "suhu_c", "rh_persen", "hujan_mm", "angin_kmh",
-                "arah_angin_derajat", "arah_mata_angin", "pm2_5", "pm10", "co", "no2", "us_aqi"]
+                "arah_angin_derajat", "arah_mata_angin", "pm2_5", "pm10", "co", "no2", "us_aqi", "cuaca_sinkron"]
         return self._csv(head, [(_iso(r["minute"], False), *[r[c] for c in CLASSES], r["total"], r["pcu"],
                                  round(r["sp_sum"] / r["sp_n"], 1) if r["sp_n"] else "", r["temp"], r["rh"], r["rain"], r["wind"],
                                  r["wind_dir"], _compass(r["wind_dir"]),
-                                 r["pm2_5"], r["pm10"], r["co"], r["no2"], r["us_aqi"]) for r in rows])
+                                 r["pm2_5"], r["pm10"], r["co"], r["no2"], r["us_aqi"], r["wx_sync"] or 0) for r in rows])
 
     def weather_csv(self, t0=None, t1=None) -> str:
         with self._lock:

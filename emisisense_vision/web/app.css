@@ -375,3 +375,10 @@ html.native .foot,html.native .rail-toggle,html.native #tFull{display:none}
 .net-row:hover{border-color:var(--accent,#1550d8)}.net-row:active{background:var(--bg)}
 .net-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.net-meta{color:var(--mute);white-space:nowrap}
 .net-sig{letter-spacing:-1px;color:var(--accent,#1550d8)}
+
+.sync{display:inline-flex;align-items:center;gap:6px}.sync svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.sync .badge{min-width:18px;padding:0 5px;border-radius:999px;background:var(--warn);color:#fff;font-size:11px;line-height:18px;text-align:center}
+.sync.busy svg{animation:spin 1s linear infinite}.sync.busy{pointer-events:none;opacity:.8}
+@keyframes spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.sync.busy svg{animation:none}}
+@media (max-width:640px){.sync span{display:none}.sync{padding:5px 8px}}
+pre.cmd{margin:6px 0 0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}

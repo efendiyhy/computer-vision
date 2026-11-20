@@ -46,6 +46,41 @@ def _get_json(url: str, params: dict, timeout: float = 10.0) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
+HIST_HOURLY = ("temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,pressure_msl,"
+               "wind_speed_10m,wind_direction_10m,wind_gusts_10m")
+HIST_AIR = "us_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone"
+MAX_PAST_DAYS = 92          # batas riwayat Open-Meteo lewat parameter past_days
+
+
+def fetch_hourly(loc: dict, t0: float, now: float | None = None, getter=None) -> tuple[dict, list]:
+    """Cuaca + kualitas udara per jam sejak t0 sampai sekarang -> ({ts_jam_utc: {variabel: nilai}}, daftar peringatan)."""
+    getter = getter or _get_json
+    now = now or time.time()
+    days = min(MAX_PAST_DAYS, max(1, int((now - t0) // 86400) + 2))
+    base = {"latitude": loc["lat"], "longitude": loc["lon"], "timezone": "GMT", "timeformat": "unixtime", "past_days": days}
+    out: dict = {}
+    warns: list = []
+    wx = getter(FORECAST_URL, {**base, "forecast_days": 1, "hourly": HIST_HOURLY}, 30.0)
+    h = wx.get("hourly") or {}
+    for i, ts in enumerate(h.get("time") or []):
+        if ts > now:
+            continue
+        row = {k: v[i] for k, v in h.items() if k != "time" and isinstance(v, list) and i < len(v) and v[i] is not None}
+        if row:
+            out[int(ts)] = row
+    try:
+        aq = getter(AIR_URL, {**base, "forecast_days": 1, "hourly": HIST_AIR}, 30.0)
+        a = aq.get("hourly") or {}
+        for i, ts in enumerate(a.get("time") or []):
+            if int(ts) in out:
+                out[int(ts)].update({k: v[i] for k, v in a.items() if k != "time" and isinstance(v, list) and i < len(v) and v[i] is not None})
+    except Exception as exc:
+        warns.append(f"Kualitas udara tidak terambil ({type(exc).__name__})")
+    if (now - t0) / 86400 > MAX_PAST_DAYS:
+        warns.append(f"Data lebih lama dari {MAX_PAST_DAYS} hari tidak tersedia lewat sinkronisasi")
+    return out, warns
+
+
 def describe(code, is_day=1) -> dict:
     text, icon = WMO.get(int(code) if code is not None else -1, ("Tidak diketahui", "cloudy"))
     if icon in ("clear", "partly") and not is_day:
