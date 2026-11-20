@@ -32,17 +32,27 @@ def main():
     ap.add_argument("--local", action="store_true", help="hanya localhost (sama dengan --host 127.0.0.1)")
     ap.add_argument("--port", type=int, default=int(os.environ.get("EMISISENSE_PORT", 5000)))
     ap.add_argument("--password", default=os.environ.get("EMISISENSE_PASSWORD"), help="kata sandi akses (opsional, disarankan di jaringan bersama)")
+    ap.add_argument("--sensor-port", type=int, default=int(os.environ.get("EMISISENSE_SENSOR_PORT", 8787)),
+                    help="port penerima data sensor PM/Gas dari ESP32 (bawaan 8787, sesuai firmware; 0 = nonaktif)")
     ap.add_argument("--no-browser", action="store_true", help="jangan membuka browser otomatis")
     a = ap.parse_args()
     host = "127.0.0.1" if a.local else a.host
     urls = netinfo.urls(a.port, host)
     app = create_app(demo=a.demo, source=a.source, urls=urls, password=a.password)
+    sensor_note = ""
+    if a.sensor_port:
+        _, err = app.pmgas_listen(a.sensor_port, host)
+        app.ingest_port = a.sensor_port if not err else a.port
+        sensor_note = (f"  Penerima sensor PM/Gas (ESP32): port {a.sensor_port}  ->  http://IP:{a.sensor_port}/api/ingest" if not err else
+                       f"  Peringatan: port sensor {a.sensor_port} tidak dapat dibuka ({err}); ESP32 bisa memakai port {a.port}.")
 
     bar = "=" * 62
     print(f"\n{bar}\n  EmisiSense Vision berjalan{'  [MODE DEMO]' if a.demo else ''}\n{bar}")
     print("  Buka dari perangkat mana pun di jaringan yang sama:")
     for u in urls:
         print(f"     {u}")
+    if sensor_note:
+        print(sensor_note)
     if a.password:
         print("  Akses dilindungi kata sandi (nama pengguna bebas).")
     elif host != "127.0.0.1":

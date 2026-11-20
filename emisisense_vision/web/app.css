@@ -382,3 +382,11 @@ html.native .foot,html.native .rail-toggle,html.native #tFull{display:none}
 @keyframes spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.sync.busy svg{animation:none}}
 @media (max-width:640px){.sync span{display:none}.sync{padding:5px 8px}}
 pre.cmd{margin:6px 0 0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+
+.exp-list{display:grid;gap:8px;margin:12px 0 4px}.exp-list>div{display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:6px 14px;align-items:center}
+.export input[type=datetime-local]{min-width:200px}
+@media (max-width:640px){.exp-list>div{grid-template-columns:1fr}}
+.pgv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 10px;font-size:12px;color:var(--mute)}.pgv b{display:block;color:var(--ink);font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}.pgv small{font-size:11px}
+.pgchip{display:inline-flex;align-items:center;gap:5px;margin-left:8px}.pgchip i{width:8px;height:8px;border-radius:50%;background:var(--bad)}.pgchip.on i{background:var(--good)}
+.pgcmp{margin-top:10px;padding-top:8px;border-top:1px solid var(--line2);font-size:12px;color:var(--mute)}
+.fld-inline input[type=text],#pgSys input[type=text]{width:100%;margin-top:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}

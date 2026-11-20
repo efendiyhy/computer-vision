@@ -206,6 +206,31 @@ cd ~/emisisense-vision && git pull && sudo ./hotspot/install-hotspot.sh
 - Aplikasi Android: tombol “Pakai hotspot Orange Pi” mengisi 10.42.0.1 dan mengikat aplikasi ke Wi-Fi agar tidak dialihkan ke data seluler.
 - CLI: `sudo emisisense-net status|scan|hotspot|boot`, `echo '{"ssid":"NAMA","password":"SANDI"}' | sudo emisisense-net connect`.
 
+## Sensor PM & gas lokal (ESP32) dan sinkronisasi data
+
+Kode penerima dari proyek [pmgas-merge](https://github.com/efendiyhy/pmgas-merge) sudah dilebur ke sini. Dua ESP32 (PM dan Gas) mengirim ke
+`http://IP-ORANGE-PI:8787/api/ingest` (port bawaan firmware; ubah dengan `--sensor-port`, `0` = nonaktif). Di dashboard tiap ESP32 isi
+**Laptop Server** dengan IP Orange Pi saja (hotspot: `10.42.0.1`). Token opsional lewat variabel lingkungan `ESP_LAN_TOKEN` (header `X-Device-Token`).
+Data open-meteo tetap ada sebagai pembanding.
+
+Tampilan memakai menu yang sudah ada: nilai dan grafik 30 menit di **Pemantauan**, grafik partikulat/gas di **Riwayat**, status alat, alamat penerima,
+nama sesi dan label di **Sistem**. Data disimpan di `data/pmgas.db`.
+
+**Pengisian data kosong.** PM dan Gas digabung menurut waktu ukur sensor (per detik). Nilai yang hilang diisi dengan nilai valid terakhir sebelumnya,
+paling lama 300 detik (dapat diubah di panel Unduh, `0` = tidak diisi); kolom yang diisi tercatat di `filled_columns`.
+
+**Unduh data** (panel Unduh di Riwayat): semua unduhan punya pilihan **tanggal dan jam** (Dari/Sampai, WIB) dan berupa ZIP berisi CSV + `KETERANGAN.txt`
+(data apa itu, rentang, jumlah baris, catatan pengolahan, arti dan satuan kolom). Pilihan:
+
+| Unduhan | Isi |
+|---|---|
+| Kendaraan + PM & gas per menit | Dokumen sinkron: hitungan vision per menit + rata-rata PM/gas per menit + cuaca Open-Meteo |
+| PM & gas per detik (sudah diisi) | Gabungan PM+Gas menurut waktu ukur, data kosong diisi |
+| PM & gas data mentah | Setiap paket ESP32 apa adanya |
+| Agregat lalu lintas per menit, Kejadian lintas, Cuaca & udara, Seluruh database | Data yang sudah ada sebelumnya |
+
+API: `/api/export/{sinkron-kendaraan-pmgas,pmgas-gabungan,pmgas-mentah,minutes,events,weather,database}.zip?from=2026-11-20T08:00&to=2026-11-20T09:30&gap=300`.
+
 ## Sinkronisasi cuaca (data direkam offline)
 
 Bila kendaraan direkam tanpa internet, kolom cuaca dan kualitas udara pada catatan menit dibiarkan kosong (tidak diisi nilai lama).

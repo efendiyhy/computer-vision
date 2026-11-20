@@ -25,6 +25,9 @@ from . import updater
 from .pipeline import Pipeline
 from .reader import test_source as probe_source
 from .storage import Storage
+from . import export as ex
+from .combined import HEAD as COMBINED_HEAD, combined_rows, to_csv
+from .pmgas import FIELDS as PG_FIELDS, FILL_GAP_DEFAULT, MERGED_COLS, RAW_COLS, PmGasStore, start_demo_feed
 from .weather import WeatherService, _get_json, fetch_hourly
 
 WEB = Path(__file__).resolve().parent / "web"
@@ -60,17 +63,6 @@ def _net_detached(cmd, payload):
     p.stdin.close()
 
 
-def _date_range():
-    """?from=YYYY-MM-DD&to=YYYY-MM-DD (waktu setempat, tanggal akhir ikut) -> (t0, t1) epoch."""
-    def p(k):
-        v = request.args.get(k)
-        try:
-            return datetime.strptime(v, "%Y-%m-%d") if v else None
-        except ValueError:
-            return None
-    a, b = p("from"), p("to")
-    return (a.timestamp() if a else None), ((b + timedelta(days=1)).timestamp() if b else None)
-
 
 def create_app(demo: bool = False, source: str | None = None, config_path: str | None = None,
                urls: list[str] | None = None, password: str | None = None):
@@ -82,21 +74,26 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
     storage = Storage(log_dir, "emisisense_demo.db" if demo else "emisisense.db")
     weather = WeatherService(cfg, demo=demo, on_data=None if demo else storage.add_weather, on_wind=storage.upsert_wind)
     analytics = Analytics(cfg, weather_cb=weather.snapshot, storage=storage)
+    pg = PmGasStore(log_dir, "pmgas_demo.db" if demo else "pmgas.db")
+    pg_token = os.environ.get("ESP_LAN_TOKEN", "")
     pipe = Pipeline(cfg, analytics, demo=demo)
     recorder = Recorder(log_dir / ("recordings_demo" if demo else "recordings"), pipe.get_record_frame, cfg)
     app = Flask(__name__, static_folder=None)
     app.config["JSON_AS_ASCII"] = False
-    app.pipeline, app.analytics, app.weather, app.cfg, app.storage = pipe, analytics, weather, cfg, storage
+    app.pipeline, app.analytics, app.weather, app.cfg, app.storage, app.pmgas = pipe, analytics, weather, cfg, storage, pg
     server_urls = urls or []
 
     weather.start()
     pipe.start()
+    if demo:
+        start_demo_feed(pg)
 
     def shutdown():
         try:
             recorder.stop()
             analytics.flush()
             storage.close()
+            pg.close()
         except Exception:
             pass
     atexit.register(shutdown)
@@ -104,7 +101,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
 
     @app.before_request
     def auth():
-        if not password:
+        if not password or (request.path == "/api/ingest" and request.method == "POST"):   # ESP32 tidak bisa kata sandi; pakai token (ESP_LAN_TOKEN) bila perlu
             return None
         a = request.authorization
         if a and a.password == password:
@@ -201,7 +198,7 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
 
     def payload():
         return {"t": time.time(), "status": pipe.get_status(), "stats": analytics.snapshot(), "weather": weather.snapshot(),
-                "version": __version__, "urls": server_urls, "demo": demo, "recording": recorder.status()}
+                "version": __version__, "urls": server_urls, "demo": demo, "recording": recorder.status(), "pmgas": pg.latest()}
 
     @app.get("/api/state")
     def state():
@@ -332,6 +329,64 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
             updater.restart_soon(app.shutdown)
         return jsonify(res)
 
+    # ---------------------------------------------------------------- sensor PM & Gas (ESP32)
+    def ingest_view():
+        if pg_token and request.headers.get("X-Device-Token", "") != pg_token:
+            return jsonify({"ok": False, "error": "Device token invalid"}), 401
+        try:
+            if request.content_length and request.content_length > 8192:
+                raise ValueError("Request too large")
+            return jsonify({"ok": True, **pg.ingest(json.loads(request.get_data() or b"{}"))})
+        except (ValueError, json.JSONDecodeError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Internal error"}), 500
+    app.add_url_rule("/api/ingest", "ingest", ingest_view, methods=["POST"])
+
+    def pmgas_listen(port: int = 8787, host: str = "0.0.0.0"):
+        """Firmware ESP32 selalu mengirim ke port 8787; buka penerima kecil di port itu (hanya /api/ingest)."""
+        from werkzeug.serving import make_server
+        mini = Flask("ingest")
+        mini.add_url_rule("/api/ingest", "ingest", ingest_view, methods=["POST"])
+        mini.add_url_rule("/", "root", lambda: "EmisiSense Vision: penerima sensor PM/Gas (POST /api/ingest)")
+        try:
+            srv = make_server(host, port, mini, threaded=True)
+        except OSError as exc:
+            return None, str(exc)
+        threading.Thread(target=srv.serve_forever, daemon=True, name="pmgas-ingest").start()
+        return srv, None
+    app.pmgas_listen = pmgas_listen
+
+    @app.get("/api/pmgas")
+    def pmgas_status():
+        hosts = []
+        for u in server_urls:
+            h = urllib.parse.urlsplit(u).hostname
+            if h and h not in hosts and h not in ("localhost", "127.0.0.1"):
+                hosts.append(h)
+        return jsonify({"latest": pg.latest(), "meta": pg.get_meta(), "stats": pg.stats(), "token": bool(pg_token),
+                        "ingest": [f"http://{h}:{getattr(app, 'ingest_port', 8787)}/api/ingest" for h in hosts],
+                        "series": pg.recent_series(1800, 30)})
+
+    @app.post("/api/pmgas/meta")
+    def pmgas_meta():
+        b = request.get_json(force=True, silent=True) or {}
+        for k in ("session", "label"):
+            if k in b and (not isinstance(b[k], str) or any(ord(c) < 32 for c in b[k])):
+                return jsonify({"error": "Teks tidak boleh berisi karakter kontrol"}), 400
+        return jsonify(pg.set_meta(b.get("session"), b.get("label")))
+
+    @app.get("/api/pmgas/history")
+    def pmgas_history():
+        try:
+            hours = min(24 * 90, max(1.0, float(request.args.get("hours", 24))))
+        except ValueError:
+            hours = 24.0
+        bucket = 300 if hours <= 3 else 900 if hours <= 12 else 3600 if hours <= 72 else 6 * 3600
+        t1 = int(time.time() // bucket * bucket) + bucket
+        t0 = t1 - int(hours * 3600 // bucket) * bucket
+        return jsonify({"bucket": bucket, "data": pg.history(t0, t1, bucket)})
+
     # ---------------------------------------------------------------- sinkronisasi cuaca (Open-Meteo)
     sync_lock = threading.Lock()
     sync_last: dict = {}
@@ -457,29 +512,89 @@ def create_app(demo: bool = False, source: str | None = None, config_path: str |
             hours = 24.0
         return jsonify(storage.windrose(hours, cfg["location"]))
 
-    def csv_resp(text, name):
-        return Response("﻿" + text, mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={name}"})
+    def _gap():
+        try:
+            return max(0, min(86400, int(request.args.get("gap", FILL_GAP_DEFAULT))))
+        except ValueError:
+            return FILL_GAP_DEFAULT
 
-    @app.get("/api/export/events.csv")
+    def _fill_note(gap):
+        return ([f"Nilai KOSONG diisi dengan nilai valid terakhir sebelumnya selama selisih waktu paling lama {gap} detik (batas isian); lebih dari itu tetap kosong. "
+                 "Baris/kolom yang diisi ditandai."] if gap else ["Pengisian nilai kosong dimatikan (gap=0): sel yang tidak punya pembacaan dibiarkan kosong."])
+
+    @app.get("/api/export/events.zip")
     def export_events():
-        analytics.flush(); t0, t1 = _date_range()
-        return csv_resp(storage.events_csv(t0, t1), "kejadian_lintas.csv")
+        analytics.flush(); t0, t1 = ex.parse_range(request.args)
+        text = storage.events_csv(t0, t1)
+        return ex.zip_response("kejadian_lintas", text, ex.keterangan(
+            "Kejadian lintas kendaraan", "Satu baris untuk setiap kendaraan atau pejalan kaki yang melewati garis hitung (hasil computer vision). Setiap garis menghitung satu arah.",
+            ex.COL_EVENTS, t0, t1, max(0, text.count("\n") - 1), version=__version__), t0, t1)
 
-    @app.get("/api/export/minutes.csv")
+    @app.get("/api/export/minutes.zip")
     def export_minutes():
-        analytics.flush(); t0, t1 = _date_range()
-        return csv_resp(storage.minutes_csv(t0, t1), "lalu_lintas_per_menit.csv")
+        analytics.flush(); t0, t1 = ex.parse_range(request.args)
+        text = storage.minutes_csv(t0, t1)
+        return ex.zip_response("lalu_lintas_per_menit", text, ex.keterangan(
+            "Agregat lalu lintas per menit", "Jumlah kendaraan per jenis, volume SMP, dan kecepatan rata-rata untuk setiap menit pencatatan, beserta cuaca dan kualitas udara Open-Meteo pada menit itu.",
+            ex.COL_MINUTES, t0, t1, max(0, text.count("\n") - 1),
+            ["Kolom pm2_5, pm10, co, no2, us_aqi pada berkas ini berasal dari model Open-Meteo, BUKAN dari sensor PM/Gas lokal. Untuk data sensor lokal lihat unduhan PM & Gas atau dokumen sinkron kendaraan + PM/Gas.",
+             "Menit yang direkam saat offline dan belum disinkronkan memiliki kolom cuaca kosong (tekan Sinkronisasi saat online)."], __version__), t0, t1)
 
-    @app.get("/api/export/weather.csv")
+    @app.get("/api/export/weather.zip")
     def export_weather():
-        t0, t1 = _date_range()
-        return csv_resp(storage.weather_csv(t0, t1), "cuaca_kualitas_udara.csv")
+        t0, t1 = ex.parse_range(request.args)
+        text = storage.weather_csv(t0, t1)
+        return ex.zip_response("cuaca_kualitas_udara", text, ex.keterangan(
+            "Cuaca dan kualitas udara (Open-Meteo)", "Rekaman cuaca, angin, dan kualitas udara dari layanan Open-Meteo untuk lokasi pemantauan. Ini data model/prakiraan, bukan hasil sensor di lokasi.",
+            ex.COL_WEATHER, t0, t1, max(0, text.count("\n") - 1), version=__version__), t0, t1)
 
-    @app.get("/api/export/database")
+    @app.get("/api/export/pmgas-gabungan.zip")
+    def export_pmgas_merged():
+        t0, t1 = ex.parse_range(request.args); gap = _gap()
+        rows = pg.merged(t0, t1, gap=gap, fill=gap > 0)
+        return ex.zip_response("sensor_pm_gas_gabungan", to_csv(MERGED_COLS, rows), ex.keterangan(
+            "Sensor PM dan Gas lokal - gabungan per detik (sudah diisi)",
+            "Data dua alat ESP32 (PM partikulat dan Gas) yang disinkronkan menurut WAKTU UKUR sensor, satu baris per detik. Nilai yang hilang sudah ditangani sehingga siap dianalisis.",
+            ex.COL_PM_MERGED, t0, t1, len(rows),
+            ["Penggabungan memakai waktu ukur pada paket sensor, bukan waktu paket diterima (paket antrean microSD tidak salah pasang)."] + _fill_note(gap) +
+            ["Data asli sebelum pengisian tersedia pada unduhan 'PM & Gas data mentah'."], __version__), t0, t1)
+
+    @app.get("/api/export/pmgas-mentah.zip")
+    def export_pmgas_raw():
+        t0, t1 = ex.parse_range(request.args)
+        kind = request.args.get("device_type", "all")
+        rows = pg.raw_rows(t0, t1, kind if kind in PG_FIELDS else None)
+        return ex.zip_response("sensor_pm_gas_mentah", to_csv(RAW_COLS, rows), ex.keterangan(
+            "Sensor PM dan Gas lokal - data mentah",
+            "Setiap paket yang diterima dari ESP32 apa adanya (satu baris per paket), untuk audit. TIDAK digabung dan TIDAK diisi; nilai kosong tetap kosong.",
+            ex.COL_PM_RAW, t0, t1, len(rows), ["Rentang waktu memakai waktu ukur sensor (atau waktu terima bila jam sensor tidak sah)."], __version__), t0, t1)
+
+    @app.get("/api/export/sinkron-kendaraan-pmgas.zip")
+    def export_combined():
+        analytics.flush(); t0, t1 = ex.parse_range(request.args); gap = _gap()
+        rows = combined_rows(storage.minutes_rows(t0, t1), pg, gap)
+        return ex.zip_response("sinkron_kendaraan_pm_gas_per_menit", to_csv(COMBINED_HEAD, rows), ex.keterangan(
+            "Sinkron kendaraan + sensor PM/Gas lokal (per menit)",
+            "Hitungan kendaraan dari computer vision disatukan dengan sensor PM dan Gas lokal. Karena vision membaca per menit, PM dan gas dirata-ratakan per menit (khusus berkas ini). Satu baris = satu menit pencatatan vision.",
+            ex.COL_COMBINED, t0, t1, len(rows),
+            ["Rata-rata per menit dihitung dari semua pembacaan sensor yang masuk pada menit itu (waktu ukur sensor, UTC dikonversi ke WIB).",
+             "Hanya menit yang tercatat oleh vision yang menjadi baris; data sensor pada menit tanpa pencatatan vision tidak tampil di sini (ada di unduhan PM & Gas)."]
+            + _fill_note(gap)[:1] + ["Kolom *_openmeteo adalah data model Open-Meteo, terpisah dari sensor lokal."], __version__), t0, t1)
+
+    @app.get("/api/export/database.zip")
     def export_db():
         analytics.flush()
-        tmp = Path(tempfile.gettempdir()) / f"emisisense_backup_{int(time.time())}.db"
-        storage.backup_to(tmp)
-        return send_file(tmp, as_attachment=True, download_name=f"emisisense_{datetime.now():%Y%m%d_%H%M}.db")
+        tmp = Path(tempfile.mkdtemp())
+        storage.backup_to(tmp / "emisisense.db"); pg.backup_to(tmp / "pmgas.db")
+        buf_name = f"emisisense_database_{datetime.now():%Y%m%d_%H%M}.zip"
+        import io, zipfile
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(tmp / "emisisense.db", "emisisense.db"); z.write(tmp / "pmgas.db", "pmgas.db")
+            z.writestr("KETERANGAN.txt", "\ufeff" + ex.keterangan(
+                "Salinan seluruh database", "Salinan lengkap dua basis data SQLite sistem ini (dibuka dengan DB Browser for SQLite atau pustaka sqlite3).",
+                ex.COL_DB, None, None, 0, ["Berisi SEMUA data tanpa pembersihan/pengisian; pilihan rentang jam tidak berlaku."], __version__))
+        shutil.rmtree(tmp, ignore_errors=True)
+        return Response(out.getvalue(), mimetype="application/zip", headers={"Content-Disposition": f'attachment; filename="{buf_name}"'})
 
     return app

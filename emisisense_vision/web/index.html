@@ -87,6 +87,7 @@ if(/EmisiSenseApp/.test(navigator.userAgent))document.documentElement.classList.
       <div class="readout-col">
         <div class="panel readout" id="readout"></div>
         <div class="panel weather" id="weather"><div class="panel-head"><h2>Cuaca &amp; udara</h2></div><div class="empty">Memuat data cuaca…</div></div>
+        <div class="panel" id="pgPanel"><div class="panel-head"><h2>Sensor PM &amp; gas (lokal)</h2><span class="muted small" id="pgChips"></span></div><div id="pgVals"><div class="empty">Menunggu data ESP32…</div></div></div>
       </div>
     </div>
 
@@ -100,6 +101,11 @@ if(/EmisiSenseApp/.test(navigator.userAgent))document.documentElement.classList.
         <div class="seg" id="segMetric"><button class="on" data-m="count">Kendaraan</button><button data-m="pcu">SMP</button></div></div>
         <div class="chart" id="chMin"></div></div>
       <div class="panel"><div class="panel-head"><h2>Komposisi jenis</h2></div><div class="chart donut" id="chComp"></div></div>
+    </div>
+
+    <div class="row r-6-6" id="pgCharts">
+      <div class="panel"><div class="panel-head"><h2>Partikulat lokal, 30 menit</h2><span class="tag">sensor ESP32</span></div><div class="chart" id="chPgPm"></div></div>
+      <div class="panel"><div class="panel-head"><h2>Gas lokal, 30 menit</h2><span class="tag">sensor ESP32</span></div><div class="chart" id="chPgGas"></div></div>
     </div>
 
     <div class="row r-6-6">
@@ -120,7 +126,11 @@ if(/EmisiSenseApp/.test(navigator.userAgent))document.documentElement.classList.
     </div>
     <div class="row r-6-6">
       <div class="panel"><div class="panel-head"><h2>Kecepatan rata-rata &amp; suhu</h2></div><div class="chart" id="chHistLine"></div></div>
-      <div class="panel"><div class="panel-head"><h2>Kualitas udara (PM2,5) &amp; volume</h2></div><div class="chart" id="chHistAir"></div></div>
+      <div class="panel"><div class="panel-head"><h2>PM2,5 Open-Meteo &amp; volume</h2></div><div class="chart" id="chHistAir"></div></div>
+    </div>
+    <div class="row r-6-6">
+      <div class="panel"><div class="panel-head"><h2>Partikulat sensor lokal (PM2,5 &amp; PM10)</h2></div><div class="chart" id="chHistPm"></div></div>
+      <div class="panel"><div class="panel-head"><h2>Gas sensor lokal (CO₂ &amp; CO)</h2></div><div class="chart" id="chHistGas"></div></div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Mawar angin</h2><span class="muted small" id="histWindRange"></span></div>
@@ -135,13 +145,20 @@ if(/EmisiSenseApp/.test(navigator.userAgent))document.documentElement.classList.
     <div class="panel">
       <div class="panel-head"><h2>Unduh data</h2></div>
       <div class="export">
-        <label>Dari <input type="date" id="dFrom"></label><label>Sampai <input type="date" id="dTo"></label>
-        <a class="btn" data-exp="events" href="#">Kejadian lintas (CSV)</a>
-        <a class="btn" data-exp="minutes" href="#">Agregat per menit (CSV)</a>
-        <a class="btn" data-exp="weather" href="#">Cuaca &amp; udara (CSV)</a>
-        <a class="btn" href="/api/export/database">Seluruh database (.db)</a>
+        <label>Dari (WIB) <input type="datetime-local" id="dFrom"></label><label>Sampai (WIB) <input type="datetime-local" id="dTo"></label>
+        <div class="seg" id="expPreset" aria-label="Rentang cepat"><button type="button" data-p="1">1 jam</button><button type="button" data-p="6">6 jam</button><button type="button" data-p="24">24 jam</button><button type="button" data-p="today">Hari ini</button><button type="button" data-p="all">Semua</button></div>
+        <label>Isi data kosong maks. <input type="number" id="dGap" value="300" min="0" max="3600" step="30" title="0 = jangan isi"> detik</label>
       </div>
-      <p class="muted small">Kosongkan tanggal untuk mengunduh semua data. Berkas CSV memakai UTF-8 dan dapat dibuka langsung di Excel.</p>
+      <div class="exp-list">
+        <div><a class="btn primary" data-exp="sinkron-kendaraan-pmgas" href="#">Kendaraan + PM &amp; gas per menit</a><span class="muted small">Dokumen sinkron: hitungan vision per menit dengan rata-rata PM/gas per menit dan cuaca.</span></div>
+        <div><a class="btn" data-exp="pmgas-gabungan" href="#">PM &amp; gas per detik (sudah diisi)</a><span class="muted small">PM dan gas digabung menurut waktu ukur; data kosong diisi nilai sebelumnya.</span></div>
+        <div><a class="btn" data-exp="pmgas-mentah" href="#">PM &amp; gas data mentah</a><span class="muted small">Setiap paket ESP32 apa adanya, tanpa gabung dan tanpa isian.</span></div>
+        <div><a class="btn" data-exp="minutes" href="#">Agregat lalu lintas per menit</a><span class="muted small">Jumlah per jenis, SMP, kecepatan, dan cuaca Open-Meteo.</span></div>
+        <div><a class="btn" data-exp="events" href="#">Kejadian lintas</a><span class="muted small">Satu baris per kendaraan yang melewati garis.</span></div>
+        <div><a class="btn" data-exp="weather" href="#">Cuaca &amp; udara Open-Meteo</a><span class="muted small">Cuaca, angin, dan kualitas udara model.</span></div>
+        <div><a class="btn" data-exp="database" href="#">Seluruh database</a><span class="muted small">Salinan SQLite lengkap (rentang jam tidak berlaku).</span></div>
+      </div>
+      <p class="muted small">Kosongkan Dari/Sampai untuk mengunduh semua data. Setiap unduhan berupa berkas ZIP berisi data (CSV, UTF-8, terbuka di Excel) dan <b>KETERANGAN.txt</b> yang menjelaskan data apa itu, rentang waktu, cara pengolahan, serta arti dan satuan tiap kolom.</p>
     </div>
   </section>
 
@@ -265,6 +282,10 @@ Tanpa terminal: halaman Riwayat, bagian Unduh data dan Rekaman video."></pre></d
       <div class="panel"><div class="panel-head"><h2>Video untuk program lain</h2></div>
         <p class="muted small">Kamera hanya bisa dibuka satu program. Program tambahan Anda cukup membaca alamat di bawah (kamera tetap dipegang dashboard), tanpa garis/kotak/watermark.</p>
         <dl class="kv" id="vidInfo"></dl></div>
+      <div class="panel" id="pgSys"><div class="panel-head"><h2>Sensor PM &amp; gas (ESP32)</h2></div>
+        <dl class="kv" id="pgInfo"></dl>
+        <div class="export"><label>Nama sesi <input type="text" id="pgSession" maxlength="120" placeholder="mis. Uji Emisi Motor A"></label><label>Label <input type="text" id="pgLabel" maxlength="120" placeholder="mis. RPM1000"></label><button class="btn sm" id="pgSave" type="button">Simpan</button></div>
+        <p class="muted small">Di dashboard tiap ESP32, isi pengaturan <b>Laptop Server</b> dengan <b>IP Orange Pi saja</b> (alamat penerima ada di atas); firmware memakai port 8787. Label berlaku untuk data yang masuk sesudah disimpan dan dapat diganti kapan saja tanpa menghentikan pencatatan.</p></div>
       <div class="panel" id="syncPanel"><div class="panel-head"><h2>Sinkronisasi cuaca</h2></div>
         <dl class="kv" id="syncInfo"></dl>
         <p class="muted small">Saat merekam kendaraan tanpa internet, cuaca dan kualitas udara belum bisa diambil. Setelah Orange Pi online, tekan <b>Sinkronisasi</b> (di bagian atas): data Open-Meteo per jam diunduh dan diisikan ke menit yang masih kosong. Data waktu nyata yang sudah ada tidak ditimpa.</p></div>

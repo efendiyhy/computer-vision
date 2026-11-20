@@ -59,7 +59,7 @@ function route() {
   $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view));
   $("#pageTitle").textContent = TITLES[view];
   document.title = TITLES[view] + " · EmisiSense Vision";
-  if (view === "history") { loadHistory(); loadWind(); loadRecs(); $("#recOverlay").checked = CFG?.record_overlay !== false; }
+  if (view === "history") { loadHistory(); loadPgHistory(); loadWind(); loadRecs(); $("#recOverlay").checked = CFG?.record_overlay !== false; }
   if (view === "live") loadWind();
   if (view === "source") initSourceView();
   if (view === "detect") initDetectView();
@@ -483,9 +483,16 @@ async function loadHistory() {
     dualLine($("#chHistAir"), d, { name: "PM2,5", color: css("--c-truck"), vals: d.map(x => x.pm2_5), unit: "µg/m³", d: 1 }, { name: "Kendaraan", color: css("--c-bus"), vals: d.map(x => KEYS.reduce((b, k) => b + (x[k] || 0), 0)), unit: "kend." }, { label: lab });
   } catch (e) { /* coba lagi pada siklus berikutnya */ }
 }
-$("#segHist").onclick = e => { const b = e.target.closest("button"); if (!b) return; histH = +b.dataset.h; $$("#segHist button").forEach(x => x.classList.toggle("on", x === b)); loadHistory(); loadWind(); };
+$("#segHist").onclick = e => { const b = e.target.closest("button"); if (!b) return; histH = +b.dataset.h; $$("#segHist button").forEach(x => x.classList.toggle("on", x === b)); loadHistory(); loadPgHistory(); loadWind(); };
 setInterval(loadHistory, 30000);
-$$("[data-exp]").forEach(a => a.onclick = e => { e.preventDefault(); const q = new URLSearchParams(); if ($("#dFrom").value) q.set("from", $("#dFrom").value); if ($("#dTo").value) q.set("to", $("#dTo").value); location.href = `/api/export/${a.dataset.exp}.csv?${q}`; });
+$$("[data-exp]").forEach(a => a.onclick = e => { e.preventDefault(); const q = new URLSearchParams(); if (a.dataset.exp !== "database") { if ($("#dFrom").value) q.set("from", $("#dFrom").value); if ($("#dTo").value) q.set("to", $("#dTo").value); const g = $("#dGap").value; if (g !== "") q.set("gap", g); } location.href = `/api/export/${a.dataset.exp}.zip?${q}`; });
+const WIBFULL = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const dtLocal = t => { const p = Object.fromEntries(WIBFULL.formatToParts(new Date(t * 1000)).map(x => [x.type, x.value])); return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`; };
+$("#expPreset").onclick = e => { const b = e.target.closest("button"); if (!b) return; const now = Date.now() / 1000, p = b.dataset.p;
+  if (p === "all") { $("#dFrom").value = ""; $("#dTo").value = ""; }
+  else if (p === "today") { $("#dFrom").value = dtLocal(now).slice(0, 10) + "T00:00"; $("#dTo").value = dtLocal(now); }
+  else { $("#dFrom").value = dtLocal(now - p * 3600); $("#dTo").value = dtLocal(now); }
+  $$("#expPreset button").forEach(x => x.classList.toggle("on", x === b)); };
 
 /* ============================== sumber & lokasi ============================== */
 let srcDirty = false, locDirty = false;
@@ -664,7 +671,7 @@ setRail(document.documentElement.dataset.rail === "min");
 function render() {
   if (!S) return; const p = S;
   renderStatus(p); renderRec(p.recording);
-  if (view === "live") { renderCamMeta(p); renderNotice(p); renderReadout(p.stats); renderWeather(p.weather); renderCharts(p.stats); renderZoneLines(p.stats); renderTables(p.stats); drawOverlay(); }
+  if (view === "live") { renderCamMeta(p); renderNotice(p); renderReadout(p.stats); renderWeather(p.weather); renderPmgas(p.pmgas); renderCharts(p.stats); renderZoneLines(p.stats); renderTables(p.stats); drawOverlay(); }
   renderSourceStatus(p); renderSystem(p);
 }
 setInterval(() => $("#clock").textContent = new Date().toLocaleTimeString("id-ID", { timeZone: TZ }) + " WIB", 1000);
@@ -679,6 +686,51 @@ syncClock(); setInterval(syncClock, 600000);
   const rows = [["Aliran video (MJPEG)", `${o}/video/raw`], ["Satu gambar (JPEG)", `${o}/snapshot/raw.jpg`], ["Dengan garis & deteksi", `${o}/video`], ["Python / OpenCV", `cv2.VideoCapture("${o}/video/raw")`]];
   $("#vidInfo").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="selectable" style="word-break:break-all">${esc(v)}</dd>`).join("");
 }
+
+// ---- Sensor PM & gas lokal (ESP32, dilebur dari pmgas-merge)
+let PG = null;
+const PGU = { pm1: ["PM1", "µg/m³", 1], pm25: ["PM2,5", "µg/m³", 1], pm10: ["PM10", "µg/m³", 1], co: ["CO", "ppm", 2], co2: ["CO₂", "ppm", 0], no2: ["NO₂", "ppm", 3], temp: ["Suhu", "°C", 1], rh: ["RH", "%", 0] };
+const ageTxt = a => a == null ? "belum ada data" : a < 90 ? Math.round(a) + " dtk lalu" : Math.round(a / 60) + " mnt lalu";
+function pgChip(name, d) { return `<span class="pgchip ${d && d.online ? "on" : ""}"><i></i>${name} ${d && d.online ? "tersambung" : "terputus (" + ageTxt(d && d.age) + ")"}</span>`; }
+function renderPmgas(l) {
+  if (!l) return;
+  $("#pgChips").innerHTML = pgChip("PM", l.pm) + pgChip("Gas", l.gas);
+  const pv = (l.pm && l.pm.values) || {}, gv = (l.gas && l.gas.values) || {};
+  if (!l.pm?.values && !l.gas?.values) { $("#pgVals").innerHTML = `<div class="empty">Menunggu data ESP32. Isi IP Orange Pi pada pengaturan Laptop Server di kedua alat (lihat halaman Sistem).</div>`; return; }
+  const cell = (k, v) => `<span>${PGU[k][0]}<b>${fmt(v, PGU[k][2])}</b><small>${PGU[k][1]}</small></span>`;
+  const om = S?.weather?.air_quality?.pm2_5;
+  $("#pgVals").innerHTML = `<div class="pgv">${cell("pm1", pv.pm1)}${cell("pm25", pv.pm25)}${cell("pm10", pv.pm10)}${cell("co", gv.co)}${cell("co2", gv.co2)}${cell("no2", gv.no2)}</div>` +
+    (om != null && pv.pm25 != null ? `<div class="pgcmp">PM2,5 sensor lokal <b>${fmt(pv.pm25, 1)}</b> · model Open-Meteo <b>${fmt(om, 1)}</b> µg/m³ (data Open-Meteo tetap dipakai sebagai pembanding)</div>` : "");
+}
+function pgCharts(series) {
+  if (!series || view !== "live") return;
+  const lab = x => hhmm(x.t);
+  dualLine($("#chPgPm"), series, { name: "PM2,5", color: css("--c-truck"), vals: series.map(x => x.pm25), unit: "µg/m³", d: 1 }, { name: "PM10", color: css("--c-bus"), vals: series.map(x => x.pm10), unit: "µg/m³", d: 1, dash: "5 4" }, { label: lab });
+  dualLine($("#chPgGas"), series, { name: "CO₂", color: css("--accent"), vals: series.map(x => x.co2), unit: "ppm" }, { name: "CO", color: css("--c-motorbike"), vals: series.map(x => x.co), unit: "ppm", d: 2, dash: "5 4" }, { label: lab });
+}
+function pgSystem() {
+  const p = PG; if (!p) return; const f = t => t ? t.replace("T", " ").slice(0, 19) : "–", l = p.latest || {}, s = p.stats || {};
+  const rows = [["Alamat penerima ESP32", (p.ingest || []).length ? p.ingest.map(esc).join("<br>") : "Sambungkan ke jaringan untuk melihat IP"],
+    ["Alat PM", l.pm?.online ? "Tersambung" : "Terputus (" + ageTxt(l.pm?.age) + ")"], ["Alat Gas", l.gas?.online ? "Tersambung" : "Terputus (" + ageTxt(l.gas?.age) + ")"],
+    ["Data PM / Gas", `${fmt(s.pm)} / ${fmt(s.gas)} paket`], ["Data pertama", f(s.first)], ["Data terakhir", f(s.last)], ["Ukuran", fmt(s.size_kb, 0) + " KB"], ["Token perangkat", p.token ? "Aktif (X-Device-Token)" : "Nonaktif (jaringan lokal tepercaya)"]];
+  $("#pgInfo").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+  if (document.activeElement !== $("#pgSession")) $("#pgSession").value = p.meta?.session || "";
+  if (document.activeElement !== $("#pgLabel")) $("#pgLabel").value = p.meta?.label || "";
+}
+async function pgLoad() {
+  try { PG = await (await fetch("/api/pmgas", { cache: "no-store" })).json(); pgCharts(PG.series); pgSystem(); if (S) renderPmgas(PG.latest); } catch (e) { /* belum siap */ }
+}
+$("#pgSave").onclick = async () => { const r = await api("/api/pmgas/meta", { session: $("#pgSession").value, label: $("#pgLabel").value }); toast(r.error ? r.error : "Sesi dan label disimpan"); pgLoad(); };
+async function loadPgHistory() {
+  if (view !== "history") return;
+  try {
+    const r = await api(`/api/pmgas/history?hours=${histH}`), d = r.data, day = r.bucket >= 6 * 3600, long = r.bucket >= 3600;
+    const lab = (x, short) => { const t = x.t ?? x, p = wibParts(t); const dm = `${p.day}/${p.month}`; return day ? dm : long ? (short ? `${dm} ${p.hour}:00` : `${dm} ${hhmm(t)}`) : hhmm(t); };
+    dualLine($("#chHistPm"), d, { name: "PM2,5", color: css("--c-truck"), vals: d.map(x => x.pm25), unit: "µg/m³", d: 1 }, { name: "PM10", color: css("--c-bus"), vals: d.map(x => x.pm10), unit: "µg/m³", d: 1, dash: "5 4" }, { label: lab });
+    dualLine($("#chHistGas"), d, { name: "CO₂", color: css("--accent"), vals: d.map(x => x.co2), unit: "ppm" }, { name: "CO", color: css("--c-motorbike"), vals: d.map(x => x.co), unit: "ppm", d: 2, dash: "5 4" }, { label: lab });
+  } catch (e) { /* coba lagi */ }
+}
+pgLoad(); setInterval(() => { if (!document.hidden) pgLoad(); }, 5000); setInterval(loadPgHistory, 30000);
 
 // ---- Sinkronisasi cuaca (Open-Meteo) untuk data yang direkam saat offline
 let syncState = null;

@@ -1,3 +1,4 @@
+import json
 import http.server, subprocess, sys, threading, time
 from pathlib import Path
 import cv2
@@ -436,3 +437,127 @@ def test_sync_endpoint_demo_and_net_message(tmp_path):
     assert c.get("/api/sync").get_json()["last"]["ok"]
     n = c.get("/api/net").get_json()
     assert n["available"] is False and n["message"]
+
+
+# ---------------------------------------------------------------- sensor PM & Gas (ESP32), sinkronisasi dan pengisian data kosong
+def _pg(tmp_path):
+    from emisisense_vision.pmgas import PmGasStore
+    return PmGasStore(Path(tmp_path) / "pg")
+
+
+def _pkt(kind, eid, ts, **vals):
+    if kind == "pm":
+        m = {"pm1_pms1": 5, "pm25_pms1": 10, "pm10_pms1": 14, "pm1_pms2": 7, "pm25_pms2": 12, "pm10_pms2": 16, "suhu": 30, "kelembapan": 60}
+    else:
+        m = {"co_ppm": 1.0, "co2_ppm": 500, "no2_ppm": 0.05, "suhu_c": 31, "rh_pct": 58, "red_v": 1, "nox_v": 1, "red_ratio": 1, "nox_ratio": 1}
+    m.update(vals)
+    return {"device_type": kind, "event_id": eid, "device_id": kind + "1", "sample_name": "s", "timestamp": ts, "uptime_ms": 1, "measurements": m}
+
+
+T0 = 1_800_000_000          # detik UTC (kelipatan 60)
+def _iso(sec):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(sec, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_pmgas_ingest_validation_and_duplicates(tmp_path):
+    import pytest
+    pg = _pg(tmp_path)
+    assert pg.ingest(_pkt("pm", "a", _iso(T0)), now=T0)["duplicate"] is False
+    assert pg.ingest(_pkt("pm", "a", _iso(T0)), now=T0)["duplicate"] is True
+    for bad in ({"device_type": "x"}, {**_pkt("pm", "b", _iso(T0)), "measurements": {"pm1_pms1": "abc"}}, {**_pkt("pm", "", _iso(T0))}):
+        with pytest.raises(ValueError):
+            pg.ingest(bad)
+    assert pg.stats()["pm"] == 1
+
+
+def test_pmgas_merge_by_sensor_time_and_forward_fill(tmp_path):
+    pg = _pg(tmp_path)
+    # detik 0..5: PM ada semua; Gas hilang pada detik 2 dan 3; paket Gas diterima terlambat (backlog) tetap dipasangkan menurut waktu ukur
+    for s in range(6):
+        pg.ingest(_pkt("pm", f"p{s}", _iso(T0 + s), pm25_pms1=10 + s, pm25_pms2=10 + s), now=T0 + 100)
+        if s not in (2, 3):
+            pg.ingest(_pkt("gas", f"g{s}", _iso(T0 + s), co2_ppm=500 + s), now=T0 + 200)
+    from emisisense_vision.pmgas import MERGED_COLS
+    ix = {c: i for i, c in enumerate(MERGED_COLS)}
+    rows = pg.merged(gap=300)
+    assert len(rows) == 6 and [r[ix["sync_status"]] for r in rows] == ["LENGKAP", "LENGKAP", "HANYA_PM", "HANYA_PM", "LENGKAP", "LENGKAP"]
+    assert rows[2][ix["co2_ppm"]] == 501 and rows[3][ix["co2_ppm"]] == 501              # diisi nilai sebelumnya
+    assert "co2_ppm" in rows[2][ix["filled_columns"]] and rows[1][ix["filled_columns"]] == ""
+    assert rows[4][ix["co2_ppm"]] == 504                                                   # nilai asli kembali
+    raw = pg.merged(gap=300, fill=False)
+    assert raw[2][ix["co2_ppm"]] is None and raw[2][ix["filled_columns"]] == ""
+    assert rows[0][ix["time_basis"]] == "SENSOR"
+
+
+def test_pmgas_fill_respects_gap_and_time_range_lookback(tmp_path):
+    pg = _pg(tmp_path)
+    from emisisense_vision.pmgas import MERGED_COLS
+    ix = {c: i for i, c in enumerate(MERGED_COLS)}
+    pg.ingest(_pkt("gas", "g0", _iso(T0), co2_ppm=777), now=T0)
+    for s in (10, 100, 1000):
+        pg.ingest(_pkt("pm", f"p{s}", _iso(T0 + s)), now=T0 + s)
+    rows = pg.merged(gap=300)
+    by = {r[ix["time_basis"]] and r[ix["waktu_utc"]]: r for r in rows}
+    assert by[_iso(T0 + 100)][ix["co2_ppm"]] == 777            # 100 dtk <= 300
+    assert by[_iso(T0 + 1000)][ix["co2_ppm"]] is None          # 1000 dtk > 300: tetap kosong
+    sub = pg.merged(T0 + 50, T0 + 500, gap=300)                # rentang jam: nilai sebelum awal rentang tetap jadi sumber isian
+    assert len(sub) == 1 and sub[0][ix["co2_ppm"]] == 777
+    assert len(pg.raw_rows(T0 + 50, T0 + 500)) == 1 and len(pg.raw_rows(None, None, "gas")) == 1
+
+
+def test_pmgas_invalid_sensor_clock_falls_back_to_received(tmp_path):
+    pg = _pg(tmp_path)
+    pg.ingest(_pkt("pm", "x", "1970-01-01T00:00:03Z"), now=T0 + 5)
+    from emisisense_vision.pmgas import MERGED_COLS
+    r = pg.merged()[0]
+    assert r[MERGED_COLS.index("time_basis")] == "RECEIVED"
+
+
+def test_pmgas_minute_average_and_combined_with_vision(tmp_path):
+    pg = _pg(tmp_path)
+    for s in range(60):                                           # menit T0: PM2,5 = 10 dan 30 bergantian -> rata-rata 20
+        pg.ingest(_pkt("pm", f"p{s}", _iso(T0 + s), pm25_pms1=10 if s % 2 else 30, pm25_pms2=10 if s % 2 else 30), now=T0 + s)
+        pg.ingest(_pkt("gas", f"g{s}", _iso(T0 + s), co_ppm=2.0), now=T0 + s)
+    ser = pg.minute_series([T0, T0 + 60, T0 + 60 * 20])
+    assert ser[T0]["v"]["pm25"] == 20 and ser[T0]["n_pm"] == 60 and ser[T0]["filled"] == []
+    assert ser[T0 + 60]["v"]["pm25"] == 20 and "pm25" in ser[T0 + 60]["filled"]      # menit tanpa data: dari menit sebelumnya
+    assert ser[T0 + 60 * 20]["v"]["pm25"] is None                                      # terlalu jauh dari data (> 300 dtk)
+    from emisisense_vision.combined import HEAD, combined_rows
+    vrow = {"minute": T0, "car": 3, "motorbike": 9, "bus": 0, "truck": 1, "bicycle": 0, "other": 0, "person": 2, "total": 13, "pcu": 7.0,
+            "sp_sum": 100.0, "sp_n": 4, "temp": 28.0, "rh": 70.0, "rain": 0.0, "wind": 5.0, "wind_dir": 90.0, "pm2_5": 15.0, "pm10": 20.0,
+            "no2": 9.0, "co": 100.0, "us_aqi": 50}
+    out = combined_rows([vrow], pg, 300)[0]
+    d = dict(zip(HEAD, out))
+    assert d["motorbike"] == 9 and d["pm25_ugm3"] == 20 and d["co_ppm"] == 2 and d["n_pm"] == 60 and d["pm2_5_openmeteo"] == 15.0 and d["kecepatan_rata_kmh"] == 25.0
+
+
+def test_export_zip_range_parsing_and_keterangan(tmp_path):
+    from emisisense_vision import export as ex
+    t0, t1 = ex.parse_range({"from": "2026-11-20T08:00", "to": "2026-11-20T09:30"})
+    assert t1 - t0 == 90 * 60 + 60                                  # jam akhir ikut sampai menit itu selesai
+    d0, d1 = ex.parse_range({"from": "2026-11-20", "to": "2026-11-20"})
+    assert d1 - d0 == 86400 and ex.parse_range({}) == (None, None) and ex.parse_range({"from": "ngawur"})[0] is None
+    txt = ex.keterangan("Judul", "Uraian data", [("kolom_a", "Arti A")], t0, t1, 5, ["catatan 1"])
+    assert "DATA APA INI" in txt and "kolom_a: Arti A" in txt and "WIB" in txt and "catatan 1" in txt
+    import zipfile, io
+    resp = ex.zip_response("tes data", "a,b\n1,2\n", txt, t0, t1)
+    z = zipfile.ZipFile(io.BytesIO(resp.get_data()))
+    assert sorted(z.namelist()) == ["KETERANGAN.txt", "tes_data.csv"] and ".zip" in resp.headers["Content-Disposition"]
+
+
+def test_ingest_endpoint_bypasses_password_and_exports_are_zip(tmp_path):
+    from emisisense_vision.server import create_app
+    app = create_app(demo=False, config_path=str(Path(tmp_path) / "c.json"), password="rahasia")
+    app.cfg.update({"log_dir": str(Path(tmp_path) / "d")}, save=False)
+    c = app.test_client()
+    assert c.get("/api/state").status_code == 401                                     # dashboard tetap dikunci
+    r = c.post("/api/ingest", data=json.dumps(_pkt("pm", "z1", _iso(int(time.time())))), content_type="application/json")
+    assert r.status_code == 200 and r.get_json()["ok"] and r.get_json()["duplicate"] is False
+    assert c.post("/api/ingest", data="{bad", content_type="application/json").status_code == 400
+    auth = {"Authorization": "Basic " + __import__("base64").b64encode(b"u:rahasia").decode()}
+    st = c.get("/api/pmgas", headers=auth).get_json()
+    assert st["latest"]["pm"]["online"] and st["stats"]["pm"] == 1
+    for name in ("pmgas-gabungan", "pmgas-mentah", "sinkron-kendaraan-pmgas", "minutes", "events", "weather", "database"):
+        resp = c.get(f"/api/export/{name}.zip?from=2020-01-01T00:00&to=2099-01-01T00:00&gap=60", headers=auth)
+        assert resp.status_code == 200 and "KETERANGAN.txt" in __import__("zipfile").ZipFile(__import__("io").BytesIO(resp.get_data())).namelist(), name

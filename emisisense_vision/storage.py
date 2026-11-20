@@ -247,6 +247,10 @@ class Storage:
         return self._csv(["waktu", "id_kendaraan", "jenis", "garis", "arah", "kecepatan_kmh", "kendaraan_unik", "cara_hitung"],
                          [(_iso(r["ts"]), r["track_id"], r["cls"], r["line"], r["direction"], r["speed_kmh"], r["is_first"], r["via"]) for r in rows])
 
+    def minutes_rows(self, t0=None, t1=None) -> list:
+        with self._lock:
+            return self._db.execute("SELECT * FROM minutes WHERE minute>=? AND minute<? ORDER BY minute", (t0 or 0, t1 or 4e9)).fetchall()
+
     def minutes_csv(self, t0=None, t1=None) -> str:
         with self._lock:
             rows = self._db.execute("SELECT * FROM minutes WHERE minute>=? AND minute<? ORDER BY minute", (t0 or 0, t1 or 4e9)).fetchall()
